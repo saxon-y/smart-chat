@@ -1,0 +1,192 @@
+# Smart Chat 技术与实施方案
+
+状态：Consensus candidate  
+日期：2026-08-18
+
+## 1. RALPLAN-DR 摘要
+
+### 原则
+
+1. 服务端权威、最小权限：membership、mention、AI 和管理员操作均在服务端校验。
+2. 消息可靠性优先：先持久化、再发布、可重放、可幂等；AI 与用户消息解耦。
+3. V1 聚焦文字，但 schema 和 API 为 content parts 演进留出明确边界。
+4. 默认隐私和可审计：密钥不出服务端，上下文不跨房间，操作可追踪。
+5. MVP 保持单体边界，只有容量与部署证据支持时才拆服务。
+
+### 三个首要决策驱动
+
+1. 房间消息访问控制与 AI 凭据/上下文隔离。
+2. 实时消息的顺序、去重、重连，以及 AI 失败时的可恢复体验。
+3. 初期运维成本与未来富媒体、水平扩展的迁移成本。
+
+### 可行方案
+
+| 方案 | 架构 | 优点 | 缺点 |
+| --- | --- | --- | --- |
+| A，推荐 | Next.js 模块化单体仓库（web/realtime/worker 三 entrypoint）+ PostgreSQL + Redis + 本地 AI gateway | 单一代码版本与领域边界；DB/outbox 保证可靠；各进程可独立扩容 | 需要常驻进程与支持长连接的运行环境；多实例依赖 Redis |
+| B | Next.js BFF + 独立 chat/realtime 服务 + queue + AI orchestrator | 隔离和水平扩展更强 | MVP 部署、协议、追踪和运维复杂度高 |
+| C | Next.js 请求内同步写消息并调用 AI，无 worker/outbox | 原型最少组件 | AI 阻塞请求，重试易重复，宕机丢事件；不满足可靠性原则，淘汰 |
+
+选择 A。方案 B 只在压测、长连接平台限制或组织边界证明必要时启用；方案 C 因违背可靠性和幂等要求而失效。
+
+## 2. 技术基线
+
+- Next.js App Router，TypeScript，Node runtime，自托管 Docker；Server Components 为默认，聊天交互局部使用 Client Components。
+- PostgreSQL 为权威数据源；ORM 在脚手架阶段依据 Node runtime、迁移体验和团队 SQL 偏好在 Prisma/Drizzle 中二选一并锁版本，不在 PRD 阶段伪装成已确定。
+- Redis 用于多实例 pub/sub、速率限制、短期 presence；消息本体和 replay cursor 不以 Redis 为权威存储。
+- 独立常驻 AI worker 消费 transactional outbox。AI gateway 默认选用可自托管、OpenAI-compatible 的实现；LiteLLM 是首选候选但在 spike 后决定。
+- 实时聊天采用 WebSocket；AI token 可复用 WebSocket 事件或单独使用 SSE。若部署平台不提供稳定长连接，则 realtime adapter 独立部署。
+- 测试建议 Vitest、Testing Library、Playwright 和容器化 PostgreSQL/Redis/gateway stub；最终依赖版本在实现时核对官方文档并固定。
+
+## 3. 系统边界
+
+```text
+Browser
+  -> Next.js UI / Route Handlers
+       -> Auth + domain services -> PostgreSQL
+       -> transactional outbox  -> AI worker -> local AI gateway -> providers
+       -> realtime adapter      <-> Redis pub/sub
+```
+
+Next.js 不能把密钥序列化给 Client Component。反向代理需支持 WebSocket upgrade/流式传输并关闭相关响应缓冲。多实例部署必须共享 pub/sub、速率限制和必要的部署密钥配置。
+
+## 4. 领域模型
+
+- `users`：id、normalizedEmail、passwordHash、displayName、avatarKey、role、status、timestamps。
+- `sessions`：id、userId、tokenHash、expiresAt、revokedAt。
+- `rooms`：id、name、slug、visibility、status、createdBy、lastSequence、timestamps。
+- `room_members`：id（每次 join 新生成且永不复用）、roomId、principalType(`USER|ASSISTANT`)、userId nullable、assistantKey nullable、roomRole、joinedAt、leftAt、version；active membership 唯一。退出只写 leftAt，历史行不可重新激活；rejoin 必须插入新 id，发送命令中的 senderMemberId 必须等于当前 session 用户的 active membership。
+- `messages`：id、roomId、senderMemberId、kind(`TEXT|AI|SYSTEM`)、body、contentParts JSON(versioned)、clientId、roomSequence、replyToId、createdAt、deletedAt；`(roomId,senderMemberId,clientId)` 唯一。
+- `message_mentions`：messageId、memberId、start、end；`(messageId,memberId)` 索引。
+- `ai_runs`：id、triggerMessageId unique、callerMemberId、authorizationPolicyVersion、providerConfigVersion、requestId、status、owner nullable、leaseGeneration、leaseExpiresAt、attempt、nextRetryAt、errorCode、tokenUsage、latency、responseMessageId unique nullable、timestamps；check status/attempt，worker claim 索引 `(status,nextRetryAt,leaseExpiresAt)`。`ai_retry_commands` 保存 `(aiRunId,idempotencyKey)` unique、requestedBy、fromAttempt、createdAt/result，避免并发手动重试重复推进。
+- `ai_provider_configs`：id、provider、model、baseUrl、secretRef/ciphertext、timeoutMs、enabled、version。
+- `outbox_events`：eventId PK、type、aggregateId、payload、schemaVersion、dedupeKey unique、orderingKey、status、attempt、owner、leaseGeneration、leaseExpiresAt、nextAttemptAt、lastError、deadLetteredAt、publishedAt、timestamps；dispatcher claim 索引 `(status,nextAttemptAt,leaseExpiresAt)`。
+- `audit_logs`：auditId（单调/UUIDv7 PK）、actorId、action、targetType/id、before/after redacted、result、requestId、createdAt。append-only；分页全序为 `(createdAt DESC,auditId DESC)`，opaque cursor 编码二元组；为该排序及 actor/action/time filters 建复合索引，留存/归档遵循 Phase 0 policy。
+
+数据库必须用 check/foreign key/partial unique index 固化以下规则：每房间只有一个 active assistant；同一用户每房间只有一个 active membership；senderMember 必须属于 message.room；`roomSequence` 在房间内唯一且永不复用；只有用户文字消息需要非空 clientId，并对 `(roomId,senderMemberId,clientId)` 做条件唯一；`body` 是 V1 的 canonical text，`contentParts` 必须由服务端从 body/mentions 派生且版本一致。房间 sequence 通过行锁/原子更新分配，先以正确性为目标，压测后再优化。
+
+服务端先把正文 NFC 规范化，再在规范化后的字符串上重新计算 Mention range；range 使用 JavaScript UTF-16 code-unit 半开区间 `[start,end)`。范围不得重叠、越界或落在代理对中间，同一成员可多次出现但关联去重。客户端 offsets 仅为 candidate，`contentParts` 从 canonical body/ranges 派生。
+
+PostgreSQL LISTEN/NOTIFY 只可作为低流量唤醒信号，不能替代 durable outbox。
+
+## 5. 接口与事件契约
+
+建议 HTTP 路由：`POST /api/auth/register|login|logout`、`GET/PATCH /api/me`、`GET/POST /api/rooms`、`POST/DELETE /api/rooms/:roomId/membership`、`GET/POST /api/rooms/:roomId/messages`、`GET /api/rooms/:roomId/members`、`POST /api/rooms/:roomId/ai-runs/:id/retry`、`GET/PUT /api/admin/ai-config`、`POST /api/admin/ai-config/health-check`、`GET /api/admin/audit-logs`。审计 API 支持 cursor 与 actor/action/time filters，只返回脱敏字段；页面为 `/admin/audit`，route 和 page loader 都做 ADMIN 校验。
+
+所有写命令接收 idempotency/client ID，返回稳定错误码和 request ID。持久事件包含 eventId、schemaVersion、roomId、orderingKey、roomSequence（适用时）和 occurredAt。`message.created`、`ai.completed` 可按 sequence 重放；`ai.started`、`ai.delta`、`ai.failed` 是带 aiRunId/version 的瞬时状态，断线后客户端以 AI run/message 快照恢复，不保证 delta 重放。WebSocket 握手、订阅和 replay 都验证 membership；客户端 ACK 最后连续 sequence，重连以 `(roomId,lastAckedSequence)` 请求补齐。
+
+## 6. AI 调用流程
+
+1. API 在事务内验证 membership/mention，写用户消息、调用者 memberId/policy snapshot 和 `AI_MENTIONED` outbox。
+2. `ai_runs` 状态机为 `PENDING -> RUNNING -> SUCCEEDED|FAILED_RETRYABLE|FAILED_FINAL`。worker 以 triggerMessageId 幂等领取事件并原子递增 leaseGeneration，写 owner/leaseExpiresAt/attempt/nextRetryAt；租约过期可回收。heartbeat、状态更新、finalize 和 side-effect enqueue 均使用 `(id,owner,leaseGeneration,leaseExpiresAt > now())` CAS guard；过期 owner 的更新影响 0 行并立即停止。处理前按持久化的 callerMemberId/policy version 检查原调用者仍为 active member；若已退出则终止，不发送上下文。
+3. context builder 只查询同 roomId 消息，先按最近条数，再按 token budget 截断；禁止读取 admin secret、其他房间或未授权附件。
+4. provider adapter 使用 AbortController 超时；只对可安全重试的错误做有限次数退避；请求携带 requestId。
+5. worker 更新 `ai_runs`，写 AI 消息及广播 outbox；`triggerMessageId` 和 AI response message 均有唯一约束。失败写稳定 errorCode，不向用户暴露内部响应。手动重试调用 `POST /api/rooms/:roomId/ai-runs/:id/retry`，携带 idempotencyKey；事务内锁定 ai_run、插入唯一 retry command，并只在合法失败状态原子递增 attempt/回到 PENDING。重复 key 返回原结果，并发不同 key 只有一个状态转换成功。管理员可发起 retry，但上下文权限始终使用原 callerMemberId，不继承管理员权限。
+
+Outbox 到 dispatcher 采用 at-least-once；Redis pub/sub 仅是 best-effort live fan-out，不承担持久交付。dispatcher 使用 skip-locked/有界批次领取并递增 leaseGeneration；heartbeat、发布确认、重试和 dead-letter 迁移由 `(eventId,owner,leaseGeneration,leaseExpiresAt > now())` CAS guard。Redis 在租约边界可能丢失或重复 event；realtime adapter 先按 eventId 去重，客户端再按 `(roomId,roomSequence)` 去重/ACK。任何缺失均以 PostgreSQL sequence replay 补齐，保证无重复可见消息和无重复持久 side effect。
+
+系统 prompt 不包含凭据。用户内容按不可信输入处理；prompt injection 不能提升工具、网络或数据权限。V1 AI 不具备工具调用权限。
+
+## 7. 安全设计
+
+- Credential auth 自主管理用户表、Argon2id、登录/注册限流和 session 撤销；Auth.js v5 文档处于过渡期，如采用必须锁版本并补齐其 Credentials 不提供的持久化/密码能力。
+- Cookie 写操作执行 CSRF/origin 验证；所有输出按纯文本编码；暂不渲染 Markdown/HTML。
+- 每个 room API、WebSocket subscribe、replay 和 AI context query 都调用同一 membership policy。
+- AI base URL 通过 schema、协议和 host allowlist 校验；禁止跟随到非 allowlist 地址，阻止 SSRF。
+- 自托管基线采用 envelope encryption：数据库只存 ciphertext、nonce、keyVersion，master key 仅来自进程 secret/env 且不进入备份；启动时缺少 key fail closed。轮换先支持双版本解密、再重加密；恢复演练必须同时验证数据库备份和独立密钥恢复。UI/API 只显示是否已配置，不显示密钥片段。
+- Auth、消息、AI、admin 分层限流；日志排除正文、Cookie、Authorization 和 provider payload。
+
+## 8. 分阶段实施与建议文件
+
+### Phase 0：决策与脚手架
+
+创建 `package.json`、`src/`、`.env.example`、`compose.yaml`、`docs/adr/`。完成 ORM、auth library、AI gateway、WebSocket hosting 四个 spike。进入 Phase 1 前必须提交并通过 contract tests 的 ADR：数据库约束与 sequence/cursor；outbox/AI 状态机；WebSocket/replay；envelope key 算法/格式/轮换及 provider DNS/IP/重定向策略；留存/删除/导出与 cleanup/tombstone；容量和公网账号安全门禁。冻结 schema、事件、错误码和数字化 SLO；未冻结不得并行开发。
+
+Phase 0 生成 `docs/SLO.md`，至少冻结 API P95 <300ms、广播 P95 <1s 的负载、样本量和窗口，并标明 AI latency、outbox oldest age、availability 是数值门禁还是 deferred。未冻结不得声称生产容量。
+
+### Phase 1：数据、身份与权限
+
+实现 `src/db/**`、`src/server/auth/**`、`src/server/policies/**`、`src/app/(auth)/**`、`src/app/api/auth/**`、`src/app/settings/profile/**`；完成 migration、seed admin、session 与 RBAC 测试。
+
+### Phase 2：房间和成员
+
+实现 `src/server/rooms/**`、`src/server/memberships/**`、`src/app/rooms/**`、`src/app/api/rooms/**`；事务创建房间和 AI member，完成目录、创建、加入、退出及 IDOR 测试。
+
+### Phase 3：消息、提及和实时
+
+实现 `src/server/messages/**`、`src/server/realtime/**`、`src/components/chat/**`、消息/member API；完成 sequence、clientId 幂等、picker、WebSocket auth、Redis fan-out、cursor replay。
+
+### Phase 4：AI 与管理后台
+
+实现 `src/server/ai/**`、`src/server/providers/**`、`src/workers/ai-worker.ts`、`src/app/admin/**`、`src/app/api/admin/**`；完成 outbox、context builder、provider config、secret storage、审计查询、健康检查和 AI 状态 UI。
+
+### Phase 5：硬化和发布
+
+实现 `src/observability/**`、安全 headers、runbook、备份恢复、负载/混沌测试和 CI gates。仅定义 image content part 契约，不实现上传 UI 或处理链路。
+
+每阶段都先写对应回归测试，再实现最小行为；lint、typecheck、unit、integration 通过后才进入下一阶段。
+
+## 9. 预演失败（Pre-mortem）
+
+1. AI payload 含密钥或其他房间消息。信号：payload contract 测试失败、redaction 告警。缓解：room-scoped query、字段 allowlist、默认不记录正文、出站 payload 测试。
+2. 重连/重试产生重复或乱序。信号：clientId 唯一冲突增加、sequence gap、outbox backlog。缓解：DB 唯一约束、服务端 sequence、transactional outbox、cursor replay 和故障注入。
+3. 模块化单体部署在连接和 AI 峰值下失稳。信号：event-loop lag、API P95、WS 断开率和队列深度超阈值。缓解：独立 entrypoint、每用户/房间限流、Redis fan-out、容量门禁；达到阈值再拆独立版本服务。
+
+## 10. 风险与缓解
+
+- 未确定的公网账号策略：开发保留验证状态与限流钩子；生产上线门禁单独决定邮箱验证/CAPTCHA/MFA。
+- ORM/Auth/网关版本快速变化：Phase 0 依据部署 runtime 做 spike，锁定版本和 ADR，不在规划阶段绑定 beta 接口。
+- 头像使“纯文字”边界模糊：V1 头像限制为受控对象 key；聊天附件仍完全禁用。
+- 未定义留存会影响 schema/API：删除、导出、留存决定列为上线阻塞项，实施前冻结。
+- WebSocket 平台差异：realtime adapter 隔离；Node/Docker 为基线，多实例必须 Redis；托管平台能力需实测。
+
+## 10.1 ADR-002：实时进程与故障语义
+
+- Status/Owner：Proposed；Phase 0 architecture owner，批准后由 verifier 复核。
+- Context/Drivers：保持单一领域模型和版本，同时隔离长连接与 AI 峰值，并允许分别扩容。
+- Decision：采用模块化单体仓库与单一发布版本，构建 `web`、`realtime`、`worker` 三个 Node entrypoint，并非三个独立版本服务。脚本为 `start:web`、`start:realtime`、`start:worker`；开发可同机运行，生产分别编排。
+- Proxy/Probes：`/api` 和页面到 web，`/ws` upgrade 到 realtime，worker 不公开。web/realtime 提供 live/ready probe，worker 提供 heartbeat/readiness。代理配置 upgrade、idle timeout、心跳并对流式响应禁用缓冲。
+- Redis 故障：消息 HTTP 写入仍可落库和进入 outbox，但实时状态标记 degraded；客户端退避重连并通过 sequence replay 恢复，不能把未广播误报为消息丢失。
+- 授权撤销：退出房间时发布 member-changed，realtime 进程主动退订/断开；每次 reconnect/replay 仍查权威 membership，避免只依赖缓存。
+- 代理与连接：明确 upgrade、idle timeout、最大连接时长、心跳；部署或进程重启允许连接中断，但必须重连恢复。
+- AI delta：允许在 Redis/进程故障时丢失；最终 AI message/failed snapshot 必须持久化并可恢复。
+- Alternatives：单进程承载全部职责；独立版本的 chat/realtime 微服务。
+- Consequences：增加进程管理面，但共享代码、schema 和发布版本；Redis 仍不是权威存储。
+- Split gate：只有连接数、event-loop lag、queue depth、托管限制或故障域证据超过 `docs/SLO.md` 阈值时，才拆独立版本服务，且不改变事件契约。
+- Follow-ups/Verification：Phase 0 固化 entrypoint/proxy/probe；以 Redis 故障、replay、进程重启和 load assertions 验证。
+
+## 11. ADR-001
+
+- Decision：采用 Next.js 模块化单体仓库及统一版本的 web/realtime/worker entrypoints、PostgreSQL、Redis、transactional outbox 和独立本地 AI gateway；WebSocket adapter 可替换。
+- Drivers：权限与密钥隔离；消息/AI 可靠性；MVP 运维成本与后续演进。
+- Alternatives considered：独立 chat/realtime 微服务；请求内同步 AI。
+- Why chosen：在可靠边界内保持最小部署复杂度，并为拆分保留事件契约。
+- Consequences：至少运行 web、worker、PostgreSQL、Redis、AI gateway；运维比纯 Next.js 多，但不会用内存状态冒充可靠消息系统。
+- Follow-ups：Phase 0 确认 ORM/Auth/gateway/hosting；容量测试决定是否拆 realtime；产品确认账号安全和数据留存。
+
+## 12. 官方依据与版本注意
+
+- Next.js 16.3.1 官方文档：App Router 默认 Server Components，Node server/Docker 支持完整特性，自托管应有反向代理；https://nextjs.org/docs/app/getting-started/installation 、https://nextjs.org/docs/app/guides/self-hosting
+- Auth.js Credentials 官方说明：应用自行实现用户持久化、密码安全等能力，且当前文档存在 v5 beta/Better Auth 迁移提示；https://authjs.dev/getting-started/authentication/credentials
+- PostgreSQL LISTEN/NOTIFY 官方文档：通知在事务提交后交付，payload 有限制，因此仅作唤醒，不作持久消息；https://www.postgresql.org/docs/current/sql-notify.html
+- AI SDK provider management 支持 provider registry 和 OpenAI-compatible base URL；https://ai-sdk.dev/docs/ai-sdk-core/provider-management
+- LiteLLM 官方文档提供自托管 OpenAI-compatible 多厂商 gateway；https://docs.litellm.ai/docs/proxy/docker_quick_start
+
+以上版本信息截至 2026-08-18；实现前重新核对并锁定版本。
+
+## 13. 执行编排与验证路径
+
+可用角色：`explore`、`researcher`、`dependency-expert`、`architect`、`executor`、`security-reviewer`、`test-engineer`、`build-fixer`、`verifier`、`critic`。
+
+- `$ralph`：单 owner 按 Phase 0-5 执行；Phase 0 由 dependency-expert 辅助，安全边界由 security-reviewer 复核，最后 verifier 收集每条 AC 证据。建议实现 medium，架构/安全/验证 high。
+- `$team`：4 条 lane：数据/Auth/政策；房间/消息/realtime；AI/admin/security；测试/可观测/发布。共享 schema/event/error contract 冻结前不并行改动。建议 4 个 executor/test lane + 1 个 verifier，最多 5 个并发。
+- Team ownership：Lane A 拥有 `src/db|server/auth|server/policies`；Lane B 拥有 `server/rooms|memberships|messages|realtime`；Lane C 拥有 `server/ai|providers|workers|app/admin`；Lane D 拥有 `tests|observability|docs/runbooks`。A 的 schema/policy 和 Architect 的 event contract 是 B/C 启动依赖；D 持续提供 gates，verifier 独立收口。
+- CLI 提示（需在附着 tmux 的 OMX CLI 中）：`omx team 4:executor "按 smart-chat/docs/IMPLEMENTATION_PLAN.md 和 TEST_SPEC.md 实施 Phase 0-5"`。本 Codex App 可改用原生 executor 子代理。
+- 团队退出前必须证明：所有 AC 有自动测试或明确人工证据；权限矩阵、secret 扫描、migration、恢复、负载 smoke 通过；无未处理高危项。之后由 verifier 独立复核完整测试输出和部署 runbook，失败项回派原 owner。
+
+## 14. 共识改进记录
+
+- Architect：补充 AI 状态机/手动重试、调用者授权语义、outbox 租约与 dead-letter、数据库条件约束、UTF-16 mention 规则、envelope encryption 生命周期、WebSocket 拓扑与恢复语义，并将未决项划分为实施/发布门禁。
+- Critic iteration 1：对齐 schema/幂等 membership epoch，澄清模块化单体 entrypoints，补齐审计查询、目录/资料/留存测试、ADR-002 和数字化 SLO 门禁。
+- Architect iteration 2：补充 lease fencing/CAS、原调用者权限快照、稳定审计游标与 membership row 不可复用约束；Phase 0 方案获条件批准。
+- Critic final：补充 Redis best-effort fan-out、eventId/sequence 去重和 PostgreSQL replay，以及 retry API 清单；最终结论 APPROVE。
