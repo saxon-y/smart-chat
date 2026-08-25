@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: smart_chat
+      POSTGRES_USER: smart_chat
+      POSTGRES_PASSWORD: smart_chat
+    ports:
+      - "5432:5432"
+    volumes:
+      - smart-chat-postgres:/var/lib/postgresql/data
+
+volumes:
+  smart-chat-postgres:
+

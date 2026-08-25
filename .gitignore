@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local self-signed dev certs
+.cert/
+
+# local uploaded avatars
+.data/
