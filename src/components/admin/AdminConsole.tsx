@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Bot, Cpu, IdCard, Sparkles, Users } from "lucide-react";
+import { Activity, ArrowLeft, Bot, Cpu, IdCard, Sparkles, Users } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useState } from "react";
 import UsersTab from "./UsersTab";
@@ -8,6 +8,8 @@ import RolesTab from "./RolesTab";
 import AgentsTab from "./AgentsTab";
 import ModelsTab from "./ModelsTab";
 import SkillsTab from "./SkillsTab";
+import AgentRunsTab from "./AgentRunsTab";
+import RoomJoinRequestsTab from "./RoomJoinRequestsTab";
 
 const TABS = [
   { id: "users", label: "用户管理", icon: Users, Component: UsersTab },
@@ -15,14 +17,16 @@ const TABS = [
   { id: "agents", label: "Agent 管理", icon: Bot, Component: AgentsTab },
   { id: "models", label: "模型配置", icon: Cpu, Component: ModelsTab },
   { id: "skills", label: "Skills 管理", icon: Sparkles, Component: SkillsTab },
+  { id: "runs", label: "运行监控", icon: Activity, Component: AgentRunsTab },
+  { id: "join-requests", label: "入群申请", icon: Users, Component: RoomJoinRequestsTab },
 ] as const;
 
 export default function AdminConsole() {
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("users");
 
   return (
-    <div className="min-h-dvh bg-background">
-      <div className="mx-auto w-[min(1100px,calc(100%-48px))] py-9">
+    <div className="admin-viewport min-h-dvh bg-background">
+      <div className="admin-page mx-auto w-[min(1180px,calc(100%-48px))] py-9">
         <header className="mb-6 flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
             <a href="/chat" className="mt-0.5 inline-flex h-8 w-8 items-center justify-center rounded-md border border-input bg-card text-muted-foreground transition-colors hover:bg-accent" aria-label="返回聊天" title="返回聊天">
@@ -38,7 +42,7 @@ export default function AdminConsole() {
           </span>
         </header>
 
-        <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
+        <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="admin-tabs-root">
           <TabsList className="flex h-auto w-full flex-wrap justify-start">
             {TABS.map((t) => {
               const Icon = t.icon;
@@ -51,7 +55,7 @@ export default function AdminConsole() {
             })}
           </TabsList>
           {TABS.map((t) => (
-            <TabsContent key={t.id} value={t.id}>
+            <TabsContent key={t.id} value={t.id} className="admin-tab-content">
               <t.Component />
             </TabsContent>
           ))}

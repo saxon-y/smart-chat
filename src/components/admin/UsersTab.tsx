@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Pagination } from "./Pagination";
 
 type Role = { id: string; name: string };
 type User = {
@@ -30,6 +31,8 @@ export default function UsersTab() {
   const [roleId, setRoleId] = useState<string>("__none__");
   const [active, setActive] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
 
   useEffect(() => {
     Promise.all([
@@ -69,7 +72,7 @@ export default function UsersTab() {
     <div className="rounded-xl border bg-card p-5">
       <h2 className="text-base font-semibold">用户管理</h2>
       <p className="mt-1 text-xs text-muted-foreground">查看用户基础信息，分配角色或停用 / 启用账号。</p>
-      <div className="mt-4 overflow-x-auto">
+      <div className="admin-list-scroll mt-4">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
@@ -82,7 +85,7 @@ export default function UsersTab() {
             </tr>
           </thead>
           <tbody>
-            {users.map((user) => (
+            {users.slice((page - 1) * pageSize, page * pageSize).map((user) => (
               <tr key={user.id} className="border-b last:border-0 hover:bg-muted/40">
                 <td className="py-2.5 pr-4 font-medium">{user.displayName}</td>
                 <td className="py-2.5 pr-4 text-muted-foreground">{user.email}</td>
@@ -99,8 +102,8 @@ export default function UsersTab() {
                   </Badge>
                 </td>
                 <td className="py-2.5 pr-4 text-right">
-                  <Button variant="outline" size="sm" onClick={() => openEdit(user)}>
-                    <Pencil className="h-3.5 w-3.5" /> 编辑
+                  <Button variant="outline" size="icon" className="admin-icon-button" data-tooltip="编辑用户" onClick={() => openEdit(user)} aria-label={`编辑 ${user.displayName}`} title="编辑用户">
+                    <Pencil />
                   </Button>
                 </td>
               </tr>
@@ -108,9 +111,10 @@ export default function UsersTab() {
           </tbody>
         </table>
       </div>
+      <Pagination page={page} pageSize={pageSize} total={users.length} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} />
 
       <Dialog open={!!editing} onOpenChange={(open) => !open && setEditing(null)}>
-        <DialogContent>
+        <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>编辑用户 · {editing?.displayName}</DialogTitle>
             <DialogDescription>{editing?.email}</DialogDescription>

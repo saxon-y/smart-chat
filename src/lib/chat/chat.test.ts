@@ -12,4 +12,12 @@ describe("chat message validation", () => {
     expect(extractMentionNames("hi @大聪明 and @Maya_1")).toEqual(["大聪明", "Maya_1"]);
     expect(extractMentionNames("mail a@b.test")).toEqual([]);
   });
+
+  it("extracts each assistant mention when multiple agents are addressed", () => {
+    expect(extractMentionNames("@绘图师\n请和 @文案师 一起处理")).toEqual(["绘图师", "文案师"]);
+  });
+
+  it("does not treat an at-sign in the middle of a token as a mention", () => {
+    expect(extractMentionNames("ticket#123@agent user@host.test foo@bar")).toEqual([]);
+  });
 });

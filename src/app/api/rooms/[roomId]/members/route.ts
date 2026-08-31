@@ -23,6 +23,10 @@ export async function POST(_request: Request, context: { params: Promise<{ roomI
   const roomId = (await context.params).roomId; const user = await getCurrentUser(); if (!user) return errorResponse("需要先登录", 401, "UNAUTHENTICATED");
   const room = await db.room.findUnique({ where: { id: roomId }, select: { id: true, visibility: true, status: true } });
   if (!room || room.visibility !== "PUBLIC" || room.status !== "ACTIVE") return errorResponse("房间不存在", 404, "NOT_FOUND");
+  const existing = await activeMembership(roomId, user.id);
+  if (existing) return json({ member: publicMember(existing) });
+  const adminMembership = await db.roomMember.findFirst({ where: { roomId, userId: user.id, leftAt: null, roomRole: { in: ["OWNER", "MODERATOR"] } } });
+  if (!adminMembership) return errorResponse("请先提交加入申请", 403, "JOIN_REQUEST_REQUIRED");
   const member = await joinRoom(roomId, user.id); return json({ member: publicMember(member) }, { status: 201 });
 }
 export async function DELETE(_request: Request, context: { params: Promise<{ roomId: string }> }) {

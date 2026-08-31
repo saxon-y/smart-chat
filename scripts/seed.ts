@@ -1,4 +1,4 @@
-import { PrismaClient, UserRole, PrincipalType, RoomRole } from "@prisma/client";
+import { PrismaClient, UserRole, PrincipalType, RoomRole, AgentKind, ModelProviderType } from "@prisma/client";
 import argon2 from "argon2";
 import { PERSONAS } from "../src/lib/ai/personas.ts";
 import { AGENT_AVATARS, AGENT_COLORS, DEFAULT_AGENT_AVATAR } from "../src/lib/ai/avatars.ts";
@@ -46,11 +46,11 @@ async function main() {
   const model = await db.model.upsert({
     where: { name: "本地默认" },
     update: {},
-    create: { name: "本地默认", modelId: process.env.LOCAL_AI_MODEL ?? "local-model", baseUrl: process.env.LOCAL_AI_BASE_URL ?? "http://localhost:4000/v1" },
+    create: { name: "本地默认", modelId: process.env.LOCAL_AI_MODEL ?? "local-model", baseUrl: process.env.LOCAL_AI_BASE_URL ?? "http://localhost:4000/v1", providerType: ModelProviderType.OPENAI_COMPATIBLE },
   });
   await db.agent.upsert({
     where: { key: "da-cong-ming" },
-    update: { modelId: model.id, avatarKey: DEFAULT_AGENT_AVATAR, primaryColor: AGENT_COLORS[0] },
+    update: { modelId: model.id, avatarKey: DEFAULT_AGENT_AVATAR, primaryColor: AGENT_COLORS[0], kind: AgentKind.CHAT },
     create: {
       key: "da-cong-ming",
       name: "大聪明",
@@ -59,8 +59,39 @@ async function main() {
       avatarKey: DEFAULT_AGENT_AVATAR,
       primaryColor: AGENT_COLORS[0],
       modelId: model.id,
+      kind: AgentKind.CHAT,
     },
   });
+
+  // Hidden room supervisor: it is configured on rooms, never added as a member.
+  const supervisor = await db.agent.upsert({
+    where: { key: "room-supervisor" },
+    update: { modelId: model.id, kind: AgentKind.SUPERVISOR, enabled: true, capabilities: [] },
+    create: {
+      key: "room-supervisor",
+      name: "房间总管",
+      description: "仅负责判断是否需要交给专职 Agent 处理。",
+      systemPrompt: "你是房间总管，只输出结构化路由决策，不直接回复用户。",
+      modelId: model.id,
+      kind: AgentKind.SUPERVISOR,
+      capabilities: [],
+      enabled: true,
+    },
+  });
+
+  // Image agents are seeded without a model so a local seed never requires an image provider.
+  const imageAgents = [
+    { key: "image-comic", name: "漫画师", capability: "image.comic" },
+    { key: "image-portrait", name: "人像师", capability: "image.portrait" },
+    { key: "image-landscape", name: "风景师", capability: "image.landscape" },
+  ];
+  for (const imageAgent of imageAgents) {
+    await db.agent.upsert({
+      where: { key: imageAgent.key },
+      update: { name: imageAgent.name, kind: AgentKind.IMAGE, capabilities: [imageAgent.capability], modelId: null, enabled: true },
+      create: { key: imageAgent.key, name: imageAgent.name, description: `${imageAgent.name}，专注于 ${imageAgent.capability}。`, systemPrompt: `你是${imageAgent.name}。`, kind: AgentKind.IMAGE, capabilities: [imageAgent.capability], enabled: true },
+    });
+  }
 
   // 预制人格库：写入 Agent 表，可直接加入房间，也可作为新建 Agent 的预设。
   for (const [index, persona] of PERSONAS.entries()) {
@@ -68,12 +99,17 @@ async function main() {
     const primaryColor = AGENT_COLORS[(index + 1) % AGENT_COLORS.length];
     await db.agent.upsert({
       where: { key: persona.key },
-      update: { name: persona.name, description: persona.description, systemPrompt: persona.systemPrompt, avatarKey, primaryColor, modelId: model.id, enabled: true },
-      create: { key: persona.key, name: persona.name, description: persona.description, systemPrompt: persona.systemPrompt, avatarKey, primaryColor, modelId: model.id, enabled: true },
+      update: { name: persona.name, description: persona.description, systemPrompt: persona.systemPrompt, avatarKey, primaryColor, modelId: model.id, kind: AgentKind.CHAT, capabilities: [], enabled: true },
+      create: { key: persona.key, name: persona.name, description: persona.description, systemPrompt: persona.systemPrompt, avatarKey, primaryColor, modelId: model.id, kind: AgentKind.CHAT, capabilities: [], enabled: true },
     });
   }
 
   const room = await db.room.upsert({ where: { slug: "welcome" }, update: { name: "欢迎" }, create: { name: "欢迎", slug: "welcome", createdById: admin.id } });
+  await db.roomSupervisor.upsert({
+    where: { roomId: room.id },
+    update: { agentId: supervisor.id, enabled: true },
+    create: { roomId: room.id, agentId: supervisor.id, enabled: true },
+  });
   const memberships = [
     { principalType: PrincipalType.USER, userId: admin.id, roomRole: RoomRole.OWNER },
     { principalType: PrincipalType.USER, userId: demo.id, roomRole: RoomRole.MEMBER },

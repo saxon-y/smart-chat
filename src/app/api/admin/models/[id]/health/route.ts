@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { requireAdmin, AuthError } from "@/lib/auth/guards";
 import { errorResponse, getRequestId, json } from "@/lib/http";
 import { decryptSecret } from "@/lib/ai/secrets";
+import { providerHealthRequest } from "@/lib/ai/providers";
 
 export const runtime = "nodejs";
 
@@ -16,7 +17,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     let ok = false;
     try {
       const key = model.ciphertext ? decryptSecret(model.ciphertext) : (model.secretRef ? process.env[model.secretRef] : process.env.LOCAL_AI_API_KEY);
-      const response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/models`, { headers: key ? { authorization: `Bearer ${key}` } : {}, signal: controller.signal });
+      const providerRequest = await providerHealthRequest({ ...model, apiKey: key });
+      const response = await fetch(providerRequest.url, { headers: providerRequest.headers, signal: controller.signal, redirect: "error", cache: "no-store" });
       ok = response.ok;
     } finally {
       clearTimeout(timer);

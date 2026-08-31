@@ -21,6 +21,7 @@ export type Member = {
   avatarKey?: string | null;
   primaryColor?: string | null;
   principalType?: string;
+  assistantKey?: string | null;
   role?: string;
   online?: boolean;
   userId?: string;
@@ -37,7 +38,16 @@ export type Message = {
   clientId?: string | null;
   roomSequence?: number;
   mentions?: Array<{ memberId: string; start: number; end: number }>;
-  contentParts?: Array<{ type: string; dataUrl: string; name?: string }> | null;
+  contentParts?: Array<{ type: string; dataUrl?: string; url?: string; name?: string; alt?: string }> | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+export type AgentRun = {
+  id: string;
+  agentKey?: string;
+  agentName?: string;
+  mode?: string;
+  status?: string;
 };
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {

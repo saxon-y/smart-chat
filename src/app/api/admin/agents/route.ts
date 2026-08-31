@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { Prisma } from "@prisma/client";
+import { AgentKind, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requireAdmin, AuthError } from "@/lib/auth/guards";
 import { errorResponse, getRequestId, json } from "@/lib/http";
@@ -12,6 +12,8 @@ const agentSchema = z.object({
   name: z.string().trim().min(1).max(100),
   description: z.string().max(2000).default(""),
   systemPrompt: z.string().max(8000).default(""),
+  kind: z.nativeEnum(AgentKind).default(AgentKind.CHAT),
+  capabilities: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
   avatarKey: z.string().trim().max(512).nullable().optional(),
   primaryColor: z.string().trim().regex(/^#[0-9a-fA-F]{6}$/, "主色必须是 6 位 Hex 颜色").nullable().optional(),
   mcpConfig: z.unknown().optional(),
@@ -20,13 +22,15 @@ const agentSchema = z.object({
   enabled: z.boolean().default(true),
 });
 
-function publicAgent(agent: { id: string; key: string; name: string; description: string; systemPrompt: string; mcpConfig: unknown; avatarKey: string | null; primaryColor: string | null; modelId: string | null; enabled: boolean; createdAt: Date; updatedAt: Date; model?: { id: string; name: string; modelId: string } | null; skills?: Array<{ skill: { id: string; name: string } }> }) {
+function publicAgent(agent: { id: string; key: string; name: string; description: string; systemPrompt: string; kind: AgentKind; capabilities: string[]; mcpConfig: unknown; avatarKey: string | null; primaryColor: string | null; modelId: string | null; enabled: boolean; createdAt: Date; updatedAt: Date; model?: { id: string; name: string; modelId: string } | null; skills?: Array<{ skill: { id: string; name: string } }> }) {
   return {
     id: agent.id,
     key: agent.key,
     name: agent.name,
     description: agent.description,
     systemPrompt: agent.systemPrompt,
+    kind: agent.kind,
+    capabilities: agent.capabilities,
     mcpConfig: agent.mcpConfig ?? null,
     avatarKey: agent.avatarKey,
     primaryColor: agent.primaryColor,
@@ -110,8 +114,22 @@ export async function DELETE(request: Request) {
     const url = new URL(request.url);
     const id = url.searchParams.get("id");
     if (!id) return errorResponse("缺少 Agent id", 400, "VALIDATION_ERROR");
-    await db.agent.delete({ where: { id } });
-    await db.auditLog.create({ data: { actorId: admin.id, action: "agent.delete", targetType: "Agent", targetId: id, requestId: getRequestId(request) } });
+    const requestId = getRequestId(request);
+    const deleted = await db.$transaction(async (tx) => {
+      const agent = await tx.agent.findUnique({ where: { id }, select: { id: true, key: true, name: true } });
+      if (!agent) return null;
+      await tx.roomSupervisor.deleteMany({ where: { agentId: id } });
+      await tx.roomMember.updateMany({
+        where: { assistantKey: agent.key, leftAt: null },
+        data: { leftAt: new Date(), version: { increment: 1 } },
+      });
+      await tx.agent.delete({ where: { id } });
+      await tx.auditLog.create({
+        data: { actorId: admin.id, action: "agent.delete", targetType: "Agent", targetId: id, before: { key: agent.key, name: agent.name }, requestId },
+      });
+      return agent;
+    });
+    if (!deleted) return errorResponse("Agent 不存在", 404, "NOT_FOUND");
     return json({ ok: true });
   } catch (error) {
     if (error instanceof AuthError) return errorResponse(error.message, error.status, error.status === 401 ? "UNAUTHENTICATED" : "FORBIDDEN");

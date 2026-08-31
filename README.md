@@ -37,6 +37,35 @@ npm run dev
 POST {baseUrl}/chat/completions
 ```
 
+### Gemini 图片生成
+
+管理员可在“模型配置”中新建图片模型，并填写：
+
+- 提供方类型：`Gemini 图片（GEMINI_IMAGES）`
+- 接口地址：`https://generativelanguage.googleapis.com/v1beta`
+- 模型 ID：`gemini-2.5-flash-image`（或 Google 当前开放的原生图片生成模型）
+- 密钥：Google AI Studio 创建的 API Key
+
+保存后将该模型绑定到 `IMAGE` 类型 Agent，并把 Agent 加入房间。API Key 会使用现有 AES-256-GCM 机制加密存储；服务端通过 `x-goog-api-key` 调用 Gemini `generateContent`，不会把密钥发送到浏览器。聊天框选择的 `1:1`、`3:2` 或 `2:3` 比例会原样传给 Gemini。
+
+生产环境还需把 `generativelanguage.googleapis.com` 加入 `AI_PROVIDER_HOST_ALLOWLIST`，例如：`AI_PROVIDER_HOST_ALLOWLIST="api.openai.com,generativelanguage.googleapis.com"`。
+
+## 专职 Agent 与图片生成
+
+房间支持一个后台总管 Agent。没有显式提及时，总管只从当前房间内的 Agent 中选择能力匹配者；显式 `@Agent` 会绕过总管直接执行。种子数据包含漫画师、人像师和风景师，首次使用前需要在管理后台为它们绑定 `OPENAI_IMAGES` 或兼容图片模型，并将 Agent 加入房间。
+
+开发环境会在 Next.js 进程内唤醒持久化任务。生产环境必须独立运行 worker，并配置相同的 `AGENT_WORKER_SECRET`：
+
+```bash
+npm run worker
+```
+
+生产环境还必须配置 `AI_PROVIDER_HOST_ALLOWLIST` 和持久化私有卷 `ARTIFACT_STORAGE_DIR`。生成图片只能通过需要登录和房间成员权限的 `/api/artifacts/:id` 读取。
+
+Artifact storage 当前提供无额外依赖的本地私有卷适配器（`ARTIFACT_STORAGE_BACKEND=local`）。生产部署将 `ARTIFACT_STORAGE_DIR` 挂载到仅应用和 worker 可读写的持久化卷；S3 兼容后端暂未启用。已标记删除且超过保留期的文件可通过 `ARTIFACT_RETENTION_DAYS` 和 `npm run artifacts:cleanup` 清理。
+
+Compose 中的 `worker` 使用同一份源码和 `npm run worker`，通过 profile 启动：`docker compose --profile worker up -d worker`。生产拓扑应运行一个 Next.js app、一个或多个独立 worker、PostgreSQL，以及 app/worker 共享的私有 artifact 卷；worker 的 `AGENT_WORKER_URL` 应指向 app 的内部 worker API，双方使用同一个 `AGENT_WORKER_SECRET`。
+
 API Key 使用 AES-256-GCM 加密后存入数据库，不会返回浏览器。生产环境建议将 `AI_CONFIG_ENCRYPTION_KEY` 放在独立 secret manager 中。
 
 ## 验证

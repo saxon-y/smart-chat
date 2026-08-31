@@ -11,214 +11,390 @@ enum UserRole {
   USER
   ADMIN
 }
+
 enum UserStatus {
   ACTIVE
   DISABLED
 }
+
 enum RoomVisibility {
   PUBLIC
   PRIVATE
   INVITE_ONLY
 }
+
 enum RoomStatus {
   ACTIVE
   ARCHIVED
 }
+
 enum PrincipalType {
   USER
   ASSISTANT
 }
+
 enum RoomRole {
   MEMBER
   MODERATOR
   OWNER
 }
+enum RoomJoinRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  EXPIRED
+}
+enum RoomInvitationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  REVOKED
+  EXPIRED
+}
+
 enum MessageKind {
   TEXT
   AI
   SYSTEM
 }
+
+enum AgentKind {
+  SUPERVISOR
+  CHAT
+  IMAGE
+}
+
+enum ModelProviderType {
+  OPENAI_COMPATIBLE
+  OPENAI_IMAGES
+  GEMINI_IMAGES
+  CUSTOM
+}
+
+enum AiRunMode {
+  DIRECT
+  SUPERVISOR
+  DELEGATED
+}
+
 enum AiRunStatus {
   PENDING
+  CLAIMED
   RUNNING
   SUCCEEDED
+  NO_ACTION
+  CANCELLED
   FAILED_RETRYABLE
   FAILED_FINAL
 }
+
 enum AuditResult {
   SUCCESS
   FAILURE
 }
 
 model User {
-  id           String      @id @default(cuid())
-  email        String      @unique
+  id           String       @id @default(cuid())
+  email        String       @unique
   passwordHash String
   displayName  String
   avatarKey    String?
-  role         UserRole    @default(USER)
-  status       UserStatus  @default(ACTIVE)
+  role         UserRole     @default(USER)
+  status       UserStatus   @default(ACTIVE)
   roleId       String?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
   sessions     Session[]
   memberships  RoomMember[]
-  roomsCreated Room[]      @relation("RoomCreator")
+  roomsCreated Room[]       @relation("RoomCreator")
   auditLogs    AuditLog[]
-  assignedRole Role?       @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  assignedRole Role?        @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  joinRequests RoomJoinRequest[]
+  reviewedJoinRequests RoomJoinRequest[] @relation("JoinRequestReviewer")
+  invitationsSent RoomInvitation[] @relation("InvitationInviter")
+  invitationsReceived RoomInvitation[] @relation("InvitationInvitee")
 }
 
 model Session {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  tokenHash String   @unique
+  tokenHash String    @unique
   expiresAt DateTime
   revokedAt DateTime?
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId, expiresAt])
 }
 
 model Room {
-  id           String       @id @default(cuid())
+  id           String          @id @default(cuid())
   name         String
-  slug         String       @unique
-  visibility   RoomVisibility @default(PUBLIC)
-  status       RoomStatus   @default(ACTIVE)
+  slug         String          @unique
+  visibility   RoomVisibility  @default(PUBLIC)
+  status       RoomStatus      @default(ACTIVE)
   createdById  String
-  lastSequence Int          @default(0)
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-  createdBy    User         @relation("RoomCreator", fields: [createdById], references: [id])
+  lastSequence Int             @default(0)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  createdBy    User            @relation("RoomCreator", fields: [createdById], references: [id])
   members      RoomMember[]
   messages     Message[]
+  supervisor   RoomSupervisor?
+  aiRuns       AiRun[]
+  outboxEvents OutboxEvent[]
+  joinRequests RoomJoinRequest[]
+  invitations RoomInvitation[]
+
   @@index([visibility, status, updatedAt])
 }
 
 model RoomMember {
-  id            String        @id @default(cuid())
-  roomId        String
-  principalType PrincipalType
-  userId        String?
-  assistantKey  String?
-  roomRole      RoomRole      @default(MEMBER)
-  joinedAt      DateTime      @default(now())
-  leftAt        DateTime?
-  version       Int           @default(1)
-  room          Room          @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  user          User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  sentMessages  Message[]     @relation("MessageSender")
-  mentions      MessageMention[]
-  aiRunsCalled  AiRun[]       @relation("AiCaller")
+  id             String           @id @default(cuid())
+  roomId         String
+  principalType  PrincipalType
+  userId         String?
+  assistantKey   String?
+  roomRole       RoomRole         @default(MEMBER)
+  joinedAt       DateTime         @default(now())
+  leftAt         DateTime?
+  version        Int              @default(1)
+  mutedUntil     DateTime?
+  room           Room             @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user           User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sentMessages   Message[]        @relation("MessageSender")
+  mentions       MessageMention[]
+  aiRunsCalled   AiRun[]          @relation("AiCaller")
+  aiRunsTargeted AiRun[]          @relation("AiRunTargetMember")
+
   @@index([roomId, leftAt])
   @@index([userId, roomId, leftAt])
-  @@unique([roomId, assistantKey])
+  @@index([roomId, assistantKey, leftAt])
+}
+
+model RoomJoinRequest {
+  id String @id @default(cuid())
+  roomId String
+  userId String
+  status RoomJoinRequestStatus @default(PENDING)
+  reason String?
+  reviewedById String?
+  reviewedAt DateTime?
+  reviewReason String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User? @relation("JoinRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  @@index([roomId, status, createdAt])
+  @@index([userId, status, createdAt])
+}
+
+model RoomInvitation {
+  id String @id @default(cuid())
+  roomId String
+  inviterId String
+  inviteeId String
+  status RoomInvitationStatus @default(PENDING)
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+  respondedAt DateTime?
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  inviter User @relation("InvitationInviter", fields: [inviterId], references: [id], onDelete: Cascade)
+  invitee User @relation("InvitationInvitee", fields: [inviteeId], references: [id], onDelete: Cascade)
+  @@index([roomId, status])
+  @@index([inviteeId, status])
 }
 
 model Message {
-  id             String          @id @default(cuid())
+  id             String           @id @default(cuid())
   roomId         String
   senderMemberId String
-  kind           MessageKind     @default(TEXT)
+  kind           MessageKind      @default(TEXT)
   body           String
   contentParts   Json?
   clientId       String?
   roomSequence   Int
   replyToId      String?
-  createdAt      DateTime        @default(now())
+  createdAt      DateTime         @default(now())
   deletedAt      DateTime?
-  room           Room            @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  senderMember   RoomMember      @relation("MessageSender", fields: [senderMemberId], references: [id])
-  replyTo        Message?        @relation("MessageReplies", fields: [replyToId], references: [id])
-  replies        Message[]       @relation("MessageReplies")
+  room           Room             @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  senderMember   RoomMember       @relation("MessageSender", fields: [senderMemberId], references: [id])
+  replyTo        Message?         @relation("MessageReplies", fields: [replyToId], references: [id])
+  replies        Message[]        @relation("MessageReplies")
   mentions       MessageMention[]
-  aiTrigger      AiRun?           @relation("AiTrigger")
+  aiTrigger      AiRun[]          @relation("AiTrigger")
   aiResponse     AiRun?           @relation("AiResponse")
+
   @@unique([roomId, roomSequence])
   @@unique([roomId, senderMemberId, clientId])
   @@index([roomId, createdAt])
 }
 
 model MessageMention {
-  id        String      @id @default(cuid())
+  id        String     @id @default(cuid())
   messageId String
   memberId  String
   start     Int
   end       Int
-  message   Message     @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  member    RoomMember  @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  message   Message    @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  member    RoomMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
   @@unique([messageId, memberId, start, end])
   @@index([messageId, memberId])
 }
 
 model AiRun {
-  id                       String      @id @default(cuid())
-  triggerMessageId         String      @unique
-  callerMemberId           String
-  authorizationPolicyVersion Int       @default(1)
-  providerConfigVersion    Int?
-  requestId                String
-  status                   AiRunStatus @default(PENDING)
-  owner                    String?
-  leaseGeneration          Int         @default(0)
-  leaseExpiresAt           DateTime?
-  attempt                  Int         @default(0)
-  nextRetryAt              DateTime?
-  errorCode                String?
-  tokenUsage               Int?
-  latencyMs                Int?
-  responseMessageId        String?     @unique
-  createdAt                DateTime    @default(now())
-  updatedAt                DateTime    @updatedAt
-  triggerMessage           Message     @relation("AiTrigger", fields: [triggerMessageId], references: [id])
-  callerMember             RoomMember  @relation("AiCaller", fields: [callerMemberId], references: [id])
-  responseMessage          Message?    @relation("AiResponse", fields: [responseMessageId], references: [id])
+  id                         String        @id @default(cuid())
+  triggerMessageId           String
+  roomId                     String
+  callerMemberId             String
+  mode                       AiRunMode     @default(DIRECT)
+  parentRunId                String?
+  targetAgentId              String?
+  targetMemberId             String?
+  configVersion              Int?
+  membershipVersion          Int?
+  decision                   String?
+  decisionConfidence         Float?
+  decisionReasonCode         String?
+  authorizationPolicyVersion Int           @default(1)
+  providerConfigVersion      Int?
+  requestId                  String
+  idempotencyKey             String?       @unique
+  status                     AiRunStatus   @default(PENDING)
+  owner                      String?
+  leaseGeneration            Int           @default(0)
+  leaseExpiresAt             DateTime?
+  attempt                    Int           @default(0)
+  nextRetryAt                DateTime?
+  errorCode                  String?
+  tokenUsage                 Int?
+  latencyMs                  Int?
+  responseMessageId          String?       @unique
+  createdAt                  DateTime      @default(now())
+  updatedAt                  DateTime      @updatedAt
+  room                       Room          @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  triggerMessage             Message       @relation("AiTrigger", fields: [triggerMessageId], references: [id])
+  callerMember               RoomMember    @relation("AiCaller", fields: [callerMemberId], references: [id])
+  responseMessage            Message?      @relation("AiResponse", fields: [responseMessageId], references: [id])
+  parentRun                  AiRun?        @relation("AiRunParent", fields: [parentRunId], references: [id], onDelete: SetNull)
+  childRuns                  AiRun[]       @relation("AiRunParent")
+  targetAgent                Agent?        @relation("AiRunTargetAgent", fields: [targetAgentId], references: [id], onDelete: SetNull)
+  targetMember               RoomMember?   @relation("AiRunTargetMember", fields: [targetMemberId], references: [id], onDelete: SetNull)
+  artifacts                  Artifact[]
+  outboxEvents               OutboxEvent[]
+
+  @@unique([triggerMessageId, mode])
+  @@unique([parentRunId, targetMemberId])
+  @@index([roomId, status, nextRetryAt, leaseExpiresAt])
+  @@index([targetMemberId, status])
   @@index([status, nextRetryAt, leaseExpiresAt])
 }
 
 model Model {
-  id         String   @id @default(cuid())
-  name       String   @unique
-  modelId    String
-  baseUrl    String
-  secretRef  String?
-  ciphertext String?
-  timeoutMs  Int      @default(30000)
-  enabled    Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  agents     Agent[]
+  id           String            @id @default(cuid())
+  name         String            @unique
+  modelId      String
+  baseUrl      String
+  secretRef    String?
+  ciphertext   String?
+  providerType ModelProviderType @default(OPENAI_COMPATIBLE)
+  timeoutMs    Int               @default(30000)
+  enabled      Boolean           @default(true)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  agents       Agent[]
+
   @@index([enabled])
 }
 
 model Agent {
-  id           String   @id @default(cuid())
-  key          String   @unique
-  name         String
-  description  String   @default("")
-  systemPrompt String   @default("")
-  mcpConfig    Json?
-  avatarKey    String?
-  primaryColor String?
-  modelId      String?
-  enabled      Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  model        Model?   @relation(fields: [modelId], references: [id], onDelete: SetNull)
-  skills       AgentSkill[]
+  id              String           @id @default(cuid())
+  key             String           @unique
+  name            String
+  description     String           @default("")
+  systemPrompt    String           @default("")
+  kind            AgentKind        @default(CHAT)
+  capabilities    String[]         @default([])
+  mcpConfig       Json?
+  avatarKey       String?
+  primaryColor    String?
+  modelId         String?
+  enabled         Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  model           Model?           @relation(fields: [modelId], references: [id], onDelete: SetNull)
+  skills          AgentSkill[]
+  supervisorRooms RoomSupervisor[] @relation("SupervisorAgent")
+  targetRuns      AiRun[]          @relation("AiRunTargetAgent")
+
   @@index([enabled])
 }
 
+model RoomSupervisor {
+  id                  String   @id @default(cuid())
+  roomId              String   @unique
+  agentId             String
+  enabled             Boolean  @default(true)
+  confidenceThreshold Float    @default(0.75)
+  configVersion       Int      @default(1)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  room                Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  agent               Agent    @relation("SupervisorAgent", fields: [agentId], references: [id], onDelete: Restrict)
+
+  @@index([agentId, enabled])
+}
+
+model Artifact {
+  id               String    @id @default(cuid())
+  runId            String?
+  objectKey        String
+  mimeType         String
+  width            Int?
+  height           Int?
+  byteSize         Int?
+  sha256           String?
+  providerMetadata Json?
+  moderationStatus String?
+  expiresAt        DateTime?
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  run              AiRun?    @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@unique([objectKey])
+  @@index([runId, createdAt])
+  @@index([expiresAt, deletedAt])
+}
+
+model OutboxEvent {
+  id          String    @id @default(cuid())
+  roomId      String
+  runId       String?
+  messageId   String?
+  type        String
+  payload     Json
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  room        Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  run         AiRun?    @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([publishedAt, createdAt])
+  @@index([roomId, createdAt])
+}
+
 model Skill {
-  id          String   @id @default(cuid())
-  name        String   @unique
-  description String   @default("")
-  source      String   @default("URL")
+  id          String       @id @default(cuid())
+  name        String       @unique
+  description String       @default("")
+  source      String       @default("URL")
   sourceRef   String?
   manifest    Json?
-  enabled     Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  enabled     Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
   agents      AgentSkill[]
 }
 
@@ -227,23 +403,24 @@ model AgentSkill {
   skillId String
   agent   Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
   skill   Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
   @@unique([agentId, skillId])
 }
 
 model Role {
-  id          String   @id @default(cuid())
-  name        String   @unique
-  description String   @default("")
-  isSystem    Boolean  @default(false)
-  createdAt   DateTime @default(now())
+  id          String           @id @default(cuid())
+  name        String           @unique
+  description String           @default("")
+  isSystem    Boolean          @default(false)
+  createdAt   DateTime         @default(now())
   permissions RolePermission[]
   users       User[]
 }
 
 model Permission {
-  id          String   @id @default(cuid())
-  key         String   @unique
-  description String   @default("")
+  id          String           @id @default(cuid())
+  key         String           @unique
+  description String           @default("")
   roles       RolePermission[]
 }
 
@@ -252,6 +429,7 @@ model RolePermission {
   permissionId String
   role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
   permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
   @@unique([roleId, permissionId])
 }
 
@@ -267,6 +445,7 @@ model AuditLog {
   requestId  String?
   createdAt  DateTime    @default(now())
   actor      User?       @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
   @@index([createdAt, id])
   @@index([actorId, action, createdAt])
 }

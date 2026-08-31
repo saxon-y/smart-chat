@@ -23,7 +23,7 @@
 ## 3. 集成测试
 
 - 注册、登录、Cookie、安全属性、退出及过期 session。
-- 创建 room + creator membership + assistant membership 的事务原子性。
+- 创建 room + creator membership + 默认聊天 Agent + 唯一房间总管配置的事务原子性。
 - 重复加入、退出后权限收回、非成员 IDOR。
 - 退出后以旧 senderMemberId/clientId 重试被拒且无新消息；重新加入产生新 membership epoch，同 clientId 只在新 epoch 生成一条消息。
 - 数据库验证退出行不可重新激活、rejoin 必须生成新 member id，发送命令的 senderMemberId 必须属于当前 session 用户和 active room membership。
@@ -42,7 +42,10 @@
 - 管理员更新配置、乐观版本冲突、密钥轮换、健康检查和审计；普通用户均 403。
 - `GET /api/admin/audit-logs` 验证 ADMIN auth、cursor/filter 与字段脱敏；普通用户 API 和 `/admin/audit` 页面均 403。
 - 审计分页在多条相同 createdAt 和并发插入下按 `(createdAt DESC,auditId DESC)` 无重漏；验证 actor/action/time 索引与 append-only 约束。
-- 删除/退出 assistant membership 返回稳定 409/403，数据库始终保持每房间恰好一个 active assistant。
+- 并发添加同一专职 Agent 返回稳定 409；退出后可生成新的 membership epoch。总管不是普通成员，每房间最多一个启用配置。
+- 无显式提及时，每条用户消息最多一个 SUPERVISOR run，AI/SYSTEM 消息不触发总管；候选目标只来自当前房间 active Agent。
+- 显式单一 `@Agent` 创建 DIRECT run 且总管调用为 0；无效 range、多 Agent 提及和已退出目标稳定拒绝且不回退总管。
+- 总管按 roomSequence 串行，专职执行受并发上限约束；lease 接管、旧 owner finalize 和 Agent 中途退出不会产生重复回复或可见孤儿图片。
 - Phase 0 冻结留存策略后，验证 cleanup/tombstone、授权删除/导出、审计及 migration/backfill；未冻结时该 contract test 阻断 Phase 1。
 - master key 缺失时 fail closed；旧/新 key 双版本轮换和数据库+密钥联合恢复成功；所有健康检查遵守 allowlist、重定向和超时策略。
 - migration 正向、回滚或 forward-fix 策略在空库和带样例数据的库中验证。
@@ -59,6 +62,7 @@
 8. 移动视口、键盘导航、中文输入法和 screen-reader live region 基础检查。
 9. 用户更新自己的昵称/头像并刷新保持；修改他人资料失败。访客目录搜索/翻页排序稳定且不泄露消息。
 10. 管理员查看审计分页/过滤；普通用户直达页面/API 失败，响应、bundle 和 trace 无 secret/ciphertext/provider payload。
+11. 分别添加漫画师、人像师和风景师；隐式请求由总管选择房间内正确能力，显式 `@人像师` 绕过总管，生成图片刷新后仍可授权访问。
 
 ## 5. 安全测试
 

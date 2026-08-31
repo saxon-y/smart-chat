@@ -1,9 +1,9 @@
-import { PrincipalType, RoomRole } from "@prisma/client";
+import { AiRunMode, PrincipalType, RoomRole } from "@prisma/client";
 import { db } from "@/lib/db";
 export { messageBodySchema, validateMessageBody, extractMentionNames } from "./validation";
 import { validateMessageBody, type ImageAttachment } from "./validation";
 import { Prisma } from "@prisma/client";
-import { publishMessage } from "./events";
+import { publishAgentEvent, publishMessage } from "./events";
 
 export const ASSISTANT_KEY = "da-cong-ming";
 export const ASSISTANT_NAME = "大聪明";
@@ -15,7 +15,7 @@ export async function activeMembership(roomId: string, userId: string) {
   return db.roomMember.findFirst({ where: { roomId, userId, principalType: PrincipalType.USER, leftAt: null } });
 }
 
-export async function resolveMentions(roomId: string, mentions: MentionInput[] = []) {
+export async function resolveMentions(roomId: string, mentions: MentionInput[] = [], body?: string) {
   if (!Array.isArray(mentions) || mentions.length > 32) throw new Error("提及信息不合法");
   const members = await db.roomMember.findMany({
     where: { roomId, leftAt: null },
@@ -23,11 +23,17 @@ export async function resolveMentions(roomId: string, mentions: MentionInput[] =
   });
   const byId = new Map(members.map((member) => [member.id, member]));
   const byName = new Map(members.filter((member) => member.user).map((member) => [member.user!.displayName.toLocaleLowerCase(), member]));
+  const agentNames = body ? await loadAgentNames() : {};
   return mentions.map((mention) => {
     const member = mention.memberId ? byId.get(mention.memberId) : mention.name ? byName.get(mention.name.toLocaleLowerCase()) : undefined;
     if (!member) throw new Error("提及必须指向当前房间的成员");
-    const start = Number.isInteger(mention.start) && (mention.start as number) >= 0 ? mention.start as number : 0;
-    const end = Number.isInteger(mention.end) && (mention.end as number) >= start ? mention.end as number : start;
+    const displayName = member.principalType === PrincipalType.ASSISTANT
+      ? agentNames[member.assistantKey ?? ""]
+      : member.user?.displayName;
+    const start = Number.isInteger(mention.start) && (mention.start as number) >= 0 ? mention.start as number : -1;
+    const end = Number.isInteger(mention.end) && (mention.end as number) > start ? mention.end as number : -1;
+    if (body !== undefined && (!displayName || start < 0 || end < 0 || body.slice(start, end).normalize("NFC") !== `@${displayName}`.normalize("NFC"))) throw new Error("提及信息与消息正文不一致");
+    if (start < 0 || end < 0) throw new Error("提及位置不合法");
     return { member, start, end };
   });
 }
@@ -55,7 +61,7 @@ export function publicMember(member: MemberRecord, agentNames?: Record<string, s
   const style = agentStyles?.[member.assistantKey ?? ""];
   const avatarKey = member.principalType === PrincipalType.ASSISTANT ? style?.avatarKey ?? null : member.user?.avatarKey ?? null;
   const primaryColor = member.principalType === PrincipalType.ASSISTANT ? style?.primaryColor ?? null : null;
-  return { id: member.id, displayName, avatarKey, primaryColor, principalType: member.principalType, role: member.roomRole, joinedAt: member.joinedAt, userId: member.userId ?? null, isMe: false };
+  return { id: member.id, displayName, avatarKey, primaryColor, principalType: member.principalType, assistantKey: member.assistantKey ?? null, role: member.roomRole, joinedAt: member.joinedAt, userId: member.userId ?? null, isMe: false };
 }
 
 export function markOwnMembership<T extends { userId?: string | null; isMe?: boolean }>(members: T[], currentUserId?: string | null): T[] {
@@ -71,27 +77,100 @@ export function publicMessage(message: MessageRecord, agentNames?: Record<string
   return { id: message.id, roomId: message.roomId, senderMemberId: message.senderMemberId, senderName, kind: message.kind, body: message.body, contentParts: message.contentParts, roomSequence: message.roomSequence, clientId: message.clientId || undefined, createdAt: message.createdAt, mentions: message.mentions?.map((mention) => ({ memberId: mention.memberId, start: mention.start, end: mention.end })) ?? [] };
 }
 
-export async function createMessage(input: { roomId: string; memberId: string; body: string; attachments?: ImageAttachment[]; clientId?: string; mentions?: MentionInput[]; requestId: string }) {
+export async function createMessage(input: { roomId: string; memberId: string; body: string; attachments?: ImageAttachment[]; metadata?: { imagePrompt?: { style: string; size: string; aspect: string } }; aiAllowed?: boolean; clientId?: string; mentions?: MentionInput[]; requestId: string }) {
   const checked = validateMessageBody(input.body, Boolean(input.attachments && input.attachments.length > 0));
   if (!checked.ok) throw new Error(checked.message);
   const attachments = input.attachments ?? [];
-  const contentParts: Prisma.InputJsonValue | undefined = attachments.length ? attachments.map((a) => ({ type: "image", dataUrl: a.dataUrl, name: a.name })) as Prisma.InputJsonValue : undefined;
-  const mentionData = await resolveMentions(input.roomId, input.mentions ?? []);
+  const parts: Array<Record<string, unknown>> = attachments.map((a) => ({ type: "image", dataUrl: a.dataUrl, name: a.name }));
+  if (input.metadata?.imagePrompt) parts.push({ type: "image_prompt_config", ...input.metadata.imagePrompt });
+  const contentParts: Prisma.InputJsonValue | undefined = parts.length ? parts as Prisma.InputJsonValue : undefined;
+  const mentionData = await resolveMentions(input.roomId, input.mentions ?? [], checked.body);
   const result = await db.$transaction(async (tx) => {
     const member = await tx.roomMember.findFirst({ where: { id: input.memberId, roomId: input.roomId, principalType: PrincipalType.USER, leftAt: null } });
     if (!member) throw new Error("需要先加入该房间");
+    if (member.mutedUntil && member.mutedUntil > new Date()) throw new Error("ROOM_MEMBER_MUTED");
     if (input.clientId) {
       const existing = await tx.message.findFirst({ where: { roomId: input.roomId, senderMemberId: member.id, clientId: input.clientId }, include: { senderMember: { include: { user: true } }, mentions: true } });
-      if (existing) return { message: existing, aiRun: null, duplicate: true };
+      if (existing) {
+        const aiRun = await tx.aiRun.findFirst({ where: { triggerMessageId: existing.id, mode: { in: [AiRunMode.DIRECT, AiRunMode.SUPERVISOR] } }, include: { targetAgent: true } });
+        return { message: existing, aiRun, duplicate: true };
+      }
     }
     const room = await tx.room.update({ where: { id: input.roomId }, data: { lastSequence: { increment: 1 } } });
     const message = await tx.message.create({ data: { roomId: input.roomId, senderMemberId: member.id, body: checked.body, contentParts: contentParts ?? undefined, clientId: input.clientId, roomSequence: room.lastSequence, mentions: { create: mentionData.map(({ member, start, end }) => ({ memberId: member.id, start, end })) } }, include: { senderMember: { include: { user: true } }, mentions: true } });
-    const assistantMention = mentionData.some(({ member }) => member.principalType === PrincipalType.ASSISTANT && member.assistantKey);
+    const assistantMentions = mentionData.filter(({ member }) => member.principalType === PrincipalType.ASSISTANT && member.assistantKey);
+    if (assistantMentions.length > 1) throw new Error("一次只能调用一个 Agent");
+    const queueDepth = await tx.aiRun.count({ where: { roomId: input.roomId, status: { in: ["PENDING", "FAILED_RETRYABLE"] } } });
+    const canQueueAi = input.aiAllowed !== false && queueDepth < 50;
     let aiRun = null;
-    if (assistantMention) aiRun = await tx.aiRun.create({ data: { triggerMessageId: message.id, callerMemberId: member.id, requestId: input.requestId } });
+    if (canQueueAi && assistantMentions.length === 1) {
+      const targetMember = assistantMentions[0].member;
+      const activeTarget = await tx.roomMember.findFirst({ where: { id: targetMember.id, roomId: input.roomId, leftAt: null, version: targetMember.version } });
+      if (!activeTarget) throw new Error("Agent 已不在当前房间");
+      const targetAgent = await tx.agent.findUnique({ where: { key: targetMember.assistantKey! } });
+      if (!targetAgent?.enabled || targetAgent.kind === "SUPERVISOR") throw new Error("Agent 不存在或不可用");
+      aiRun = await tx.aiRun.create({
+        data: {
+          triggerMessageId: message.id,
+          roomId: input.roomId,
+          callerMemberId: member.id,
+          mode: AiRunMode.DIRECT,
+          targetAgentId: targetAgent.id,
+          targetMemberId: targetMember.id,
+          membershipVersion: targetMember.version,
+          requestId: input.requestId,
+          idempotencyKey: `message:${message.id}:direct`,
+        },
+        include: { targetAgent: true },
+      });
+    } else if (canQueueAi) {
+      const supervisor = await tx.roomSupervisor.findUnique({ where: { roomId: input.roomId }, include: { agent: true } });
+      if (supervisor?.enabled && supervisor.agent.enabled) {
+        aiRun = await tx.aiRun.create({
+          data: {
+            triggerMessageId: message.id,
+            roomId: input.roomId,
+            callerMemberId: member.id,
+            mode: AiRunMode.SUPERVISOR,
+            configVersion: supervisor.configVersion,
+            requestId: input.requestId,
+            idempotencyKey: `message:${message.id}:supervisor`,
+          },
+          include: { targetAgent: true },
+        });
+      }
+    }
+    if (aiRun) {
+      await tx.outboxEvent.create({
+        data: {
+          roomId: input.roomId,
+          runId: aiRun.id,
+          messageId: message.id,
+          type: "agent_queued",
+          payload: {
+            runId: aiRun.id,
+            agentKey: aiRun.targetAgent?.key ?? "room-supervisor",
+            agentName: aiRun.targetAgent?.name ?? "房间总管",
+            mode: aiRun.mode,
+            status: "queued",
+          },
+        },
+      });
+    }
     return { message, aiRun, duplicate: false };
   });
   if (!result.duplicate) publishMessage(input.roomId, result.message.id);
+  if (!result.duplicate && result.aiRun) {
+    publishAgentEvent({
+      type: "agent_queued",
+      roomId: input.roomId,
+      runId: result.aiRun.id,
+      agentKey: result.aiRun.targetAgent?.key ?? "room-supervisor",
+      agentName: result.aiRun.targetAgent?.name ?? "房间总管",
+      mode: result.aiRun.mode,
+      status: "queued",
+    });
+  }
   return result;
 }
 

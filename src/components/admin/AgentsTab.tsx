@@ -13,12 +13,15 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { PERSONAS } from "@/lib/ai/personas";
 import { AGENT_AVATARS, AGENT_COLORS, DEFAULT_AGENT_AVATAR } from "@/lib/ai/avatars";
+import { Pagination } from "./Pagination";
 
 type Model = { id: string; name: string; modelId: string; enabled: boolean };
 type Skill = { id: string; name: string };
-type Agent = { id: string; key: string; name: string; description: string; systemPrompt: string; mcpConfig: unknown; avatarKey: string | null; primaryColor: string | null; modelId: string | null; model: { id: string; name: string; modelId: string } | null; enabled: boolean; skills: Skill[] };
-type Draft = { id?: string; personaKey?: string; key: string; name: string; description: string; systemPrompt: string; mcpConfig: string; avatarKey: string; primaryColor: string; modelId: string | null; skillIds: string[]; enabled: boolean };
-const EMPTY: Draft = { personaKey: "", key: "", name: "", description: "", systemPrompt: "", mcpConfig: "", avatarKey: DEFAULT_AGENT_AVATAR, primaryColor: AGENT_COLORS[0], modelId: null, skillIds: [], enabled: true };
+type AgentKind = "SUPERVISOR" | "CHAT" | "IMAGE";
+type Agent = { id: string; key: string; name: string; description: string; systemPrompt: string; kind: AgentKind; capabilities: string[]; mcpConfig: unknown; avatarKey: string | null; primaryColor: string | null; modelId: string | null; model: { id: string; name: string; modelId: string } | null; enabled: boolean; skills: Skill[] };
+type Draft = { id?: string; personaKey?: string; key: string; name: string; description: string; systemPrompt: string; kind: AgentKind; capabilities: string[]; mcpConfig: string; avatarKey: string; primaryColor: string; modelId: string | null; skillIds: string[]; enabled: boolean };
+const EMPTY: Draft = { personaKey: "", key: "", name: "", description: "", systemPrompt: "", kind: "CHAT", capabilities: [], mcpConfig: "", avatarKey: DEFAULT_AGENT_AVATAR, primaryColor: AGENT_COLORS[0], modelId: null, skillIds: [], enabled: true };
+const AGENT_KIND_LABELS: Record<AgentKind, string> = { SUPERVISOR: "总管", CHAT: "对话", IMAGE: "图片" };
 
 export default function AgentsTab() {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -27,7 +30,11 @@ export default function AgentsTab() {
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState("");
   const [error, setError] = useState("");
+  const [listError, setListError] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
 
   useEffect(() => {
     Promise.all([
@@ -44,7 +51,7 @@ export default function AgentsTab() {
     setAgents(agents ?? []);
   }
   function openEdit(agent: Agent) {
-    setDraft({ id: agent.id, personaKey: "", key: agent.key, name: agent.name, description: agent.description, systemPrompt: agent.systemPrompt, mcpConfig: agent.mcpConfig ? JSON.stringify(agent.mcpConfig, null, 2) : "", avatarKey: agent.avatarKey ?? DEFAULT_AGENT_AVATAR, primaryColor: agent.primaryColor ?? AGENT_COLORS[0], modelId: agent.modelId, skillIds: agent.skills.map((s) => s.id), enabled: agent.enabled });
+    setDraft({ id: agent.id, personaKey: "", key: agent.key, name: agent.name, description: agent.description, systemPrompt: agent.systemPrompt, kind: agent.kind, capabilities: agent.capabilities ?? [], mcpConfig: agent.mcpConfig ? JSON.stringify(agent.mcpConfig, null, 2) : "", avatarKey: agent.avatarKey ?? DEFAULT_AGENT_AVATAR, primaryColor: agent.primaryColor ?? AGENT_COLORS[0], modelId: agent.modelId, skillIds: agent.skills.map((s) => s.id), enabled: agent.enabled });
     setError("");
   }
   function openCreate() {
@@ -76,7 +83,16 @@ export default function AgentsTab() {
   }
   async function remove(id: string) {
     if (!window.confirm("确认删除该 Agent？已加入房间的实例将失效。")) return;
-    try { await api(`/api/admin/agents?id=${id}`, { method: "DELETE" }); refresh(); } catch { /* ignore */ }
+    setDeletingId(id);
+    setListError("");
+    try {
+      await api(`/api/admin/agents?id=${id}`, { method: "DELETE" });
+      setAgents((current) => current.filter((agent) => agent.id !== id));
+    } catch (error) {
+      setListError(error instanceof Error ? error.message : "无法删除 Agent");
+    } finally {
+      setDeletingId("");
+    }
   }
   function toggleSkill(id: string) {
     setDraft((c) => c ? { ...c, skillIds: c.skillIds.includes(id) ? c.skillIds.filter((s) => s !== id) : [...c.skillIds, id] } : c);
@@ -94,30 +110,35 @@ export default function AgentsTab() {
         </div>
         <Button size="sm" onClick={openCreate}><Plus className="h-4 w-4" /> 新建 Agent</Button>
       </div>
-      <div className="mt-4 overflow-x-auto">
+      {listError && <p className="mt-3 text-sm text-destructive" role="alert">{listError}</p>}
+      <div className="admin-list-scroll mt-4">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
               <th className="py-2 pr-4 font-medium">名称</th>
               <th className="py-2 pr-4 font-medium">key</th>
               <th className="py-2 pr-4 font-medium">模型</th>
+              <th className="py-2 pr-4 font-medium">类型</th>
+              <th className="py-2 pr-4 font-medium">能力</th>
               <th className="py-2 pr-4 font-medium">Skills</th>
               <th className="py-2 pr-4 font-medium">状态</th>
               <th className="py-2 pr-4 font-medium text-right">操作</th>
             </tr>
           </thead>
           <tbody>
-            {agents.map((agent) => (
+            {agents.slice((page - 1) * pageSize, page * pageSize).map((agent) => (
               <tr key={agent.id} className="border-b last:border-0 hover:bg-muted/40">
                 <td className="py-2.5 pr-4 font-medium"><div className="flex items-center gap-2"><span className="agent-avatar-thumb" aria-hidden="true" style={{ backgroundImage: `url(${agent.avatarKey ?? DEFAULT_AGENT_AVATAR})` }} /><span>{agent.name}</span></div><div className="text-xs font-normal text-muted-foreground">{agent.description || "—"}</div></td>
                 <td className="py-2.5 pr-4 text-muted-foreground">{agent.key}</td>
                 <td className="py-2.5 pr-4">{agent.model ? agent.model.name : <Badge variant="destructive">未绑定</Badge>}</td>
+                <td className="py-2.5 pr-4"><Badge variant="outline">{AGENT_KIND_LABELS[agent.kind]}</Badge></td>
+                <td className="max-w-[180px] py-2.5 pr-4 text-xs text-muted-foreground">{agent.capabilities?.length ? agent.capabilities.join(", ") : "—"}</td>
                 <td className="py-2.5 pr-4 text-muted-foreground">{agent.skills.length} 个</td>
                 <td className="py-2.5 pr-4"><Badge variant={agent.enabled ? "success" : "destructive"}>{agent.enabled ? "启用" : "停用"}</Badge></td>
                 <td className="py-2.5 pr-4 text-right">
                   <div className="flex justify-end gap-2">
-                    <Button variant="outline" size="sm" onClick={() => openEdit(agent)}><Pencil className="h-3.5 w-3.5" /> 编辑</Button>
-                    <Button variant="destructive" size="sm" onClick={() => remove(agent.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                    <Button variant="outline" size="icon" className="admin-icon-button" data-tooltip="编辑 Agent" onClick={() => openEdit(agent)} aria-label={`编辑 ${agent.name}`} title="编辑 Agent"><Pencil /></Button>
+                    <Button variant="destructive" size="sm" onClick={() => remove(agent.id)} disabled={deletingId === agent.id} aria-label={`删除 ${agent.name}`} title="删除 Agent">{deletingId === agent.id ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}</Button>
                   </div>
                 </td>
               </tr>
@@ -125,9 +146,10 @@ export default function AgentsTab() {
           </tbody>
         </table>
       </div>
+      <Pagination page={page} pageSize={pageSize} total={agents.length} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} />
 
       <Dialog open={!!draft} onOpenChange={(open) => !open && setDraft(null)}>
-        <DialogContent className="max-w-xl">
+        <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>{draft?.id ? "编辑 Agent" : "新建 Agent"}</DialogTitle>
             <DialogDescription>配置助手的人设上下文、绑定模型、Skills 与 MCP。</DialogDescription>
@@ -149,6 +171,10 @@ export default function AgentsTab() {
                 <div className="grid gap-2"><Label>key</Label><Input value={draft.key} onChange={(e) => setDraft({ ...draft, key: e.target.value.toLowerCase() })} placeholder="如 da-cong-ming" /></div>
               </div>
               <div className="grid gap-2"><Label>描述</Label><Input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-2"><Label>Agent 类型</Label><Select value={draft.kind} onValueChange={(value) => setDraft({ ...draft, kind: value as AgentKind })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{(Object.keys(AGENT_KIND_LABELS) as AgentKind[]).map((kind) => <SelectItem key={kind} value={kind}>{AGENT_KIND_LABELS[kind]}（{kind}）</SelectItem>)}</SelectContent></Select></div>
+                <div className="grid gap-2"><Label>能力标签</Label><Input value={draft.capabilities.join(", ")} onChange={(e) => setDraft({ ...draft, capabilities: e.target.value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean) })} placeholder="如 image.portrait, chat" /></div>
+              </div>
               <div className="grid gap-2"><Label>系统提示词（上下文 / 人设）</Label><Textarea rows={4} value={draft.systemPrompt} onChange={(e) => setDraft({ ...draft, systemPrompt: e.target.value })} /></div>
               <div className="grid gap-2">
                 <Label>Agent 头像</Label>

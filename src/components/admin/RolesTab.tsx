@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Pagination } from "./Pagination";
 
 type Permission = { key: string; description: string };
 type Role = { id: string; name: string; description: string; isSystem: boolean; permissions: Permission[]; userCount: number };
@@ -21,6 +22,8 @@ export default function RolesTab() {
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
 
   async function refresh() {
     const { roles } = await api<{ roles: Role[] }>("/api/admin/roles");
@@ -82,7 +85,7 @@ export default function RolesTab() {
         </div>
         <Button size="sm" onClick={openCreate}><Plus className="h-4 w-4" /> 新建角色</Button>
       </div>
-      <div className="mt-4 overflow-x-auto">
+      <div className="admin-list-scroll mt-4">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
@@ -94,7 +97,7 @@ export default function RolesTab() {
             </tr>
           </thead>
           <tbody>
-            {roles.map((role) => (
+            {roles.slice((page - 1) * pageSize, page * pageSize).map((role) => (
               <tr key={role.id} className="border-b last:border-0 hover:bg-muted/40">
                 <td className="py-2.5 pr-4 font-medium">
                   {role.name}
@@ -105,9 +108,9 @@ export default function RolesTab() {
                 <td className="py-2.5 pr-4">{role.userCount}</td>
                 <td className="py-2.5 pr-4 text-right">
                   <div className="flex justify-end gap-2">
-                    <Button variant="outline" size="sm" onClick={() => openEdit(role)}><Pencil className="h-3.5 w-3.5" /> 编辑</Button>
+                    <Button variant="outline" size="icon" className="admin-icon-button" data-tooltip="编辑角色" onClick={() => openEdit(role)} aria-label={`编辑 ${role.name}`} title="编辑角色"><Pencil /></Button>
                     {!role.isSystem && (
-                      <Button variant="destructive" size="sm" onClick={() => remove(role.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                      <Button variant="destructive" size="icon" className="admin-icon-button" data-tooltip="删除角色" onClick={() => remove(role.id)} aria-label={`删除 ${role.name}`} title="删除角色"><Trash2 /></Button>
                     )}
                   </div>
                 </td>
@@ -116,9 +119,10 @@ export default function RolesTab() {
           </tbody>
         </table>
       </div>
+      <Pagination page={page} pageSize={pageSize} total={roles.length} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} />
 
       <Dialog open={!!draft} onOpenChange={(open) => !open && setDraft(null)}>
-        <DialogContent>
+        <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>{draft?.id ? "编辑角色" : "新建角色"}</DialogTitle>
             <DialogDescription>为角色命名并勾选它拥有的使用权限。</DialogDescription>

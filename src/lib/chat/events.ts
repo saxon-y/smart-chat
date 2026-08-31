@@ -7,7 +7,19 @@
 export type ChatEvent =
   | { type: "message"; roomId: string; messageId: string }
   | { type: "ai_thinking"; roomId: string; agentKey: string; agentName: string; triggerMessageId: string }
-  | { type: "ai_done"; roomId: string; agentKey: string; triggerMessageId: string; ok: boolean; error?: string };
+  | { type: "ai_done"; roomId: string; agentKey: string; triggerMessageId: string; ok: boolean; error?: string }
+  | {
+      type: "agent_queued" | "agent_routed" | "agent_progress" | "agent_done";
+      roomId: string;
+      runId: string;
+      agentKey: string;
+      agentName: string;
+      mode: string;
+      status: string;
+      progress?: number;
+      ok?: boolean;
+      error?: string;
+    };
 
 type Listener = (event: ChatEvent) => void;
 
@@ -50,4 +62,8 @@ export function publishAiThinking(roomId: string, agentKey: string, agentName: s
 
 export function publishAiDone(roomId: string, agentKey: string, triggerMessageId: string, ok: boolean, error?: string) {
   publishChatEvent({ type: "ai_done", roomId, agentKey, triggerMessageId, ok, error });
+}
+
+export function publishAgentEvent(event: Extract<ChatEvent, { type: "agent_queued" | "agent_routed" | "agent_progress" | "agent_done" }>) {
+  publishChatEvent(event);
 }

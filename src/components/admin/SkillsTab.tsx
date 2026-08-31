@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Pagination } from "./Pagination";
 
 type Skill = { id: string; name: string; description: string; source: string; sourceRef: string | null; enabled: boolean };
 type LocalSkill = { name: string; root: string; path: string; hasManifest: boolean };
@@ -25,6 +26,8 @@ export default function SkillsTab() {
   const [busy, setBusy] = useState(false);
   const [urlOpen, setUrlOpen] = useState(false);
   const [url, setUrl] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
 
   async function refresh() {
     const { skills } = await api<{ skills: Skill[] }>("/api/admin/skills");
@@ -76,7 +79,7 @@ export default function SkillsTab() {
           <Button size="sm" onClick={() => setUrlOpen(true)}><Download className="h-4 w-4" /> 线上安装</Button>
         </div>
       </div>
-      <div className="mt-4 overflow-x-auto">
+      <div className="admin-list-scroll mt-4">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
@@ -88,22 +91,23 @@ export default function SkillsTab() {
             </tr>
           </thead>
           <tbody>
-            {skills.map((skill) => (
+            {skills.slice((page - 1) * pageSize, page * pageSize).map((skill) => (
               <tr key={skill.id} className="border-b last:border-0 hover:bg-muted/40">
                 <td className="py-2.5 pr-4 font-medium">{skill.name}<div className="text-xs font-normal text-muted-foreground">{skill.description || "—"}</div></td>
                 <td className="py-2.5 pr-4"><Badge variant="secondary">{skill.source}</Badge></td>
                 <td className="py-2.5 pr-4 max-w-[260px] truncate text-muted-foreground">{skill.sourceRef ?? "—"}</td>
                 <td className="py-2.5 pr-4"><Badge variant={skill.enabled ? "success" : "destructive"}>{skill.enabled ? "启用" : "停用"}</Badge></td>
-                <td className="py-2.5 pr-4 text-right"><Button variant="destructive" size="sm" onClick={() => remove(skill.id)}><Trash2 className="h-3.5 w-3.5" /></Button></td>
+                <td className="py-2.5 pr-4 text-right"><Button variant="destructive" size="icon" className="admin-icon-button" data-tooltip="删除 Skill" onClick={() => remove(skill.id)} aria-label={`删除 ${skill.name}`} title="删除 Skill"><Trash2 /></Button></td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      <Pagination page={page} pageSize={pageSize} total={skills.length} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} />
 
       {/* Local import dialog */}
       <Dialog open={local.length > 0} onOpenChange={(open) => !open && setLocal([])}>
-        <DialogContent>
+        <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>从本地导入 Skills</DialogTitle>
             <DialogDescription>扫描 ~/.codex/skills、~/.codex/agents、~/.claude/skills、~/.claude/agents。</DialogDescription>
@@ -117,7 +121,7 @@ export default function SkillsTab() {
                     <td className="py-2.5 pr-4 font-medium">{skill.name}</td>
                     <td className="py-2.5 pr-4"><Badge variant="secondary">{skill.root}</Badge></td>
                     <td className="py-2.5 pr-4 text-muted-foreground">{skill.hasManifest ? "已识别" : "目录"}</td>
-                    <td className="py-2.5 pr-4 text-right"><Button variant="outline" size="sm" onClick={() => importLocal(skill)} disabled={busy}><Plus className="h-3.5 w-3.5" /> 导入</Button></td>
+                    <td className="py-2.5 pr-4 text-right"><Button variant="outline" size="icon" className="admin-icon-button" data-tooltip="导入 Skill" onClick={() => importLocal(skill)} disabled={busy} aria-label={`导入 ${skill.name}`} title="导入 Skill"><Plus /></Button></td>
                   </tr>
                 ))}
               </tbody>
@@ -129,7 +133,7 @@ export default function SkillsTab() {
 
       {/* URL install dialog */}
       <Dialog open={urlOpen} onOpenChange={setUrlOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>线上安装 Skill</DialogTitle>
             <DialogDescription>粘贴 Skill 的 URL 地址，主要来源 ClawHub / skills.sh / GitHub。</DialogDescription>

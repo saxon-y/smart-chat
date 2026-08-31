@@ -1,17 +1,21 @@
-import { db } from "@/lib/db";
-import { triggerAiForMessage } from "@/lib/ai";
+import { processAiRun, recoverPendingAiRuns } from "@/lib/ai/service";
 
-/** In-process MVP boundary. A dedicated worker can consume the same AiRun later. */
+let recoveryStarted = false;
+
+function startRecoveryLoop() {
+  if (recoveryStarted || process.env.NODE_ENV === "test" || process.env.NODE_ENV === "production") return;
+  recoveryStarted = true;
+  const timer = setInterval(() => { void recoverPendingAiRuns().catch(() => undefined); }, 5000);
+  timer.unref();
+}
+
 export async function triggerAiRun(runId: string): Promise<void> {
-  const run = await db.aiRun.findUnique({
-    where: { id: runId },
-    include: { triggerMessage: { select: { roomId: true } } },
-  });
-  if (!run) throw new Error("ai_run_not_found");
-  await triggerAiForMessage({
-    roomId: run.triggerMessage.roomId,
-    triggerMessageId: run.triggerMessageId,
-    callerMemberId: run.callerMemberId,
-    requestId: run.requestId,
-  });
+  startRecoveryLoop();
+  await processAiRun(runId);
+}
+
+export function ensureAiWorker() {
+  if (process.env.NODE_ENV === "production") return;
+  startRecoveryLoop();
+  void recoverPendingAiRuns().catch(() => undefined);
 }

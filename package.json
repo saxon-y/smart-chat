@@ -9,6 +9,8 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "worker": "node --experimental-strip-types scripts/agent-worker.ts",
+    "artifacts:cleanup": "node --experimental-strip-types scripts/cleanup-artifacts.ts",
     "db:push": "prisma db push",
     "db:seed": "node --experimental-strip-types scripts/seed.ts",
     "prisma:generate": "prisma generate",

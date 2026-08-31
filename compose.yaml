@@ -11,6 +11,18 @@ services:
     volumes:
       - smart-chat-postgres:/var/lib/postgresql/data
 
+  worker:
+    profiles: [worker]
+    image: node:22-bookworm-slim
+    working_dir: /app
+    command: ["npm", "run", "worker"]
+    env_file: .env
+    depends_on:
+      - postgres
+    volumes:
+      - .:/app
+      - smart-chat-artifacts:/app/.data
+
 volumes:
   smart-chat-postgres:
-
+  smart-chat-artifacts:

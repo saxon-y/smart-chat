@@ -23,7 +23,9 @@ export async function POST(request: Request) {
   const room = await db.$transaction(async (tx) => {
     let slug = base;
     for (let index = 1; await tx.room.findUnique({ where: { slug } }); index += 1) slug = `${base}-${index}`;
-    return tx.room.create({ data: { name, slug, createdById: user.id, members: { create: [{ userId: user.id, principalType: PrincipalType.USER, roomRole: RoomRole.OWNER }, { principalType: PrincipalType.ASSISTANT, assistantKey: "da-cong-ming" }] } }, include: { _count: { select: { members: true } } } });
+    const supervisor = await tx.agent.findFirst({ where: { kind: "SUPERVISOR", enabled: true }, orderBy: { createdAt: "asc" } });
+    if (!supervisor) throw new Error("room_supervisor_not_configured");
+    return tx.room.create({ data: { name, slug, createdById: user.id, supervisor: { create: { agentId: supervisor.id } }, members: { create: [{ userId: user.id, principalType: PrincipalType.USER, roomRole: RoomRole.OWNER }, { principalType: PrincipalType.ASSISTANT, assistantKey: "da-cong-ming" }] } }, include: { _count: { select: { members: true } } } });
   });
   return json({ room: { id: room.id, name: room.name, slug: room.slug, visibility: room.visibility, status: room.status, memberCount: room._count.members, createdAt: room.createdAt, updatedAt: room.updatedAt } }, { status: 201, headers: { "x-request-id": getRequestId(request) } });
 }

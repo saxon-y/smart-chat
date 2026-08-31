@@ -1,0 +1,1 @@
+ALTER TYPE "ModelProviderType" ADD VALUE 'GEMINI_IMAGES';

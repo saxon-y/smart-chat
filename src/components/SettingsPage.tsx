@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Check, ImagePlus, LoaderCircle, ShieldCheck, X } from "lucide-react";
+import { ArrowLeft, Check, Dices, ImagePlus, LoaderCircle, ShieldCheck, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { api, initials, unwrap, User } from "./api";
@@ -76,6 +76,16 @@ export default function SettingsPage() {
 
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarError, setAvatarError] = useState("");
+
+  function generateAvatar(nextColor = themeColor) {
+    const color = nextColor;
+    const seed = Math.floor(Math.random() * 360);
+    const secondary = `hsl(${(seed + 42) % 360} 48% 32%)`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96"><rect width="96" height="96" rx="20" fill="${color}"/><path fill="${secondary}" d="M0 68 25 43l14 14 16-20 41 42H0Z"/><circle cx="31" cy="32" r="10" fill="#fff" fill-opacity=".82"/><path fill="#fff" fill-opacity=".34" d="M0 0h96v18H0z"/></svg>`;
+    setAvatar(`data:image/svg+xml,${encodeURIComponent(svg)}`);
+    setSaved(false);
+    setSavedError("");
+  }
 
   async function uploadAvatar(file: File) {
     setAvatarError("");
@@ -238,6 +248,16 @@ export default function SettingsPage() {
                       移除
                     </button>
                   )}
+                </div>
+                <div className="avatar-random-row">
+                  <label className="avatar-color-picker" title="设置随机头像主色">
+                    <input type="color" value={themeColor} onChange={(event) => { const color = event.target.value; setThemeColor(color); if (avatar.startsWith("data:image/svg+xml,")) generateAvatar(color); }} aria-label="随机头像颜色" />
+                    <span>头像颜色</span>
+                  </label>
+                  <button type="button" className="secondary-button avatar-random-button" onClick={() => generateAvatar()} title="随机生成头像">
+                    <Dices size={15} />
+                    <span>随机生成</span>
+                  </button>
                 </div>
                 {avatarError && <span className="field-help avatar-error">{avatarError}</span>}
                 <span className="field-help">
