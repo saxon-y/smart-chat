@@ -108,8 +108,9 @@ function loadRun(runId: string) {
 async function claimRun(runId: string, owner: string) {
   const now = new Date();
   return db.$transaction(async (tx) => {
-    const candidate = await tx.aiRun.findUnique({ where: { id: runId }, select: { roomId: true, mode: true, targetAgentId: true } });
+    const candidate = await tx.aiRun.findUnique({ where: { id: runId }, select: { roomId: true, mode: true, targetAgentId: true, runtimeKind: true } });
     if (!candidate) return false;
+    if (candidate.runtimeKind && candidate.runtimeKind !== "legacy") return false;
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${candidate.roomId}))`;
     const activeStatuses: AiRunStatus[] = [AiRunStatus.CLAIMED, AiRunStatus.RUNNING];
     const activeRoom = await tx.aiRun.count({ where: { roomId: candidate.roomId, status: { in: activeStatuses } } });
@@ -168,7 +169,7 @@ async function runSupervisor(run: NonNullable<Awaited<ReturnType<typeof loadRun>
     if (!targetStillActive || !agentStillActive) throw new Error("agent_not_available");
     const done = await tx.aiRun.updateMany({ where: { id: run.id, owner: run.owner, leaseGeneration: run.leaseGeneration, status: AiRunStatus.RUNNING }, data: { status: AiRunStatus.SUCCEEDED, decision: "DELEGATE", decisionConfidence: decision.confidence, decisionReasonCode: decision.reasonCode, tokenUsage: result.tokenUsage, leaseExpiresAt: null } });
     if (done.count !== 1) throw new Error("run_lease_lost");
-    return tx.aiRun.create({ data: { triggerMessageId: run.triggerMessageId, roomId: run.roomId, callerMemberId: run.callerMemberId, mode: AiRunMode.DELEGATED, parentRunId: run.id, targetAgentId: targetAgent.id, targetMemberId: targetMember.id, membershipVersion: targetMember.version, configVersion: supervisor.configVersion, requestId: run.requestId, idempotencyKey: `${run.id}:${targetMember.id}` } });
+    return tx.aiRun.create({ data: { triggerMessageId: run.triggerMessageId, roomId: run.roomId, callerMemberId: run.callerMemberId, mode: AiRunMode.DELEGATED, parentRunId: run.id, targetAgentId: targetAgent.id, targetMemberId: targetMember.id, membershipVersion: targetMember.version, configVersion: supervisor.configVersion, runtimeId: run.runtimeId, runtimeKind: run.runtimeKind, runtimeVersion: run.runtimeVersion, requestId: run.requestId, idempotencyKey: `${run.id}:${targetMember.id}` } });
   });
   publishAgentEvent({ type: "agent_routed", roomId: run.roomId, runId: child.id, agentKey: targetAgent.key, agentName: targetAgent.name, mode: child.mode, status: "routed" });
   await processAiRun(child.id);

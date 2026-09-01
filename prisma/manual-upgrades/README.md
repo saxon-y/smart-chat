@@ -8,3 +8,10 @@ For an existing database, back it up and apply `20260828_existing_database_agent
 npx prisma db execute --file prisma/manual-upgrades/20260828_existing_database_agent_orchestration.sql --schema prisma/schema.prisma
 npx prisma migrate resolve --applied 20260828120000_agent_orchestration
 ```
+
+After the baseline and later checked-in migrations are applied, existing databases that were maintained with `db push` can apply the Agent Runtime metadata upgrade with:
+
+```bash
+npx prisma db execute --file prisma/manual-upgrades/20260901_existing_database_agent_runtime_metadata.sql --schema prisma/schema.prisma
+npx prisma migrate resolve --applied 20260901183000_agent_runtime_metadata
+```

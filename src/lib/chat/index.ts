@@ -1,5 +1,6 @@
 import { AiRunMode, PrincipalType, RoomRole } from "@prisma/client";
 import { db } from "@/lib/db";
+import { configuredRuntimeSnapshot } from "@/lib/ai/runtime-mode";
 export { messageBodySchema, validateMessageBody, extractMentionNames } from "./validation";
 import { validateMessageBody, type ImageAttachment } from "./validation";
 import { Prisma } from "@prisma/client";
@@ -111,6 +112,7 @@ export async function createMessage(input: { roomId: string; memberId: string; b
       if (!targetAgent?.enabled || targetAgent.kind === "SUPERVISOR") throw new Error("Agent 不存在或不可用");
       aiRun = await tx.aiRun.create({
         data: {
+          ...configuredRuntimeSnapshot(),
           triggerMessageId: message.id,
           roomId: input.roomId,
           callerMemberId: member.id,
@@ -128,6 +130,7 @@ export async function createMessage(input: { roomId: string; memberId: string; b
       if (supervisor?.enabled && supervisor.agent.enabled) {
         aiRun = await tx.aiRun.create({
           data: {
+            ...configuredRuntimeSnapshot(),
             triggerMessageId: message.id,
             roomId: input.roomId,
             callerMemberId: member.id,

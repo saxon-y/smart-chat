@@ -80,8 +80,14 @@ enum AiRunMode {
 
 enum AiRunStatus {
   PENDING
+  PREPARING
+  READY
   CLAIMED
   RUNNING
+  WAITING_APPROVAL
+  PAUSED
+  RETRY_WAIT
+  BLOCKED
   SUCCEEDED
   NO_ACTION
   CANCELLED
@@ -261,6 +267,16 @@ model AiRun {
   decisionReasonCode         String?
   authorizationPolicyVersion Int           @default(1)
   providerConfigVersion      Int?
+  runtimeId                  String?
+  runtimeKind                String?
+  runtimeVersion             String?
+  taskDigest                 String?
+  contextGeneration          Int           @default(0)
+  skillBundleHash            String?
+  mcpBundleDigest            String?
+  checkpointSequence         Int           @default(0)
+  cancelRequestedAt          DateTime?
+  blockedReason              String?
   requestId                  String
   idempotencyKey             String?       @unique
   status                     AiRunStatus   @default(PENDING)
@@ -271,6 +287,10 @@ model AiRun {
   nextRetryAt                DateTime?
   errorCode                  String?
   tokenUsage                 Int?
+  inputTokens                Int           @default(0)
+  outputTokens               Int           @default(0)
+  toolCallCount              Int           @default(0)
+  costMicros                 Int           @default(0)
   latencyMs                  Int?
   responseMessageId          String?       @unique
   createdAt                  DateTime      @default(now())
@@ -291,6 +311,7 @@ model AiRun {
   @@index([roomId, status, nextRetryAt, leaseExpiresAt])
   @@index([targetMemberId, status])
   @@index([status, nextRetryAt, leaseExpiresAt])
+  @@index([runtimeId, status, nextRetryAt, leaseExpiresAt])
 }
 
 model Model {

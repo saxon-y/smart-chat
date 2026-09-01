@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { generateImage, providerHealthRequest } from "./providers";
+import { callChatProvider, generateImage, providerHealthRequest } from "./providers";
 
 vi.mock("node:dns/promises", () => ({ lookup: vi.fn().mockResolvedValue([{ address: "8.8.8.8", family: 4 }]) }));
 
@@ -81,5 +81,38 @@ describe("OpenAI image provider", () => {
     expect(fetchMock).toHaveBeenCalledWith("https://generativelanguage.googleapis.com/v1/images/generations", expect.objectContaining({
       body: JSON.stringify({ model: "gpt-image-1", prompt: "draw", size: "1536x1024" }),
     }));
+  });
+});
+
+describe("OpenAI-compatible chat provider", () => {
+  it("preserves the chat completion request, content, and usage contract", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: "  hello  " } }],
+      usage: { total_tokens: 17 },
+    }), { status: 200 }));
+
+    const result = await callChatProvider({
+      ...config,
+      baseUrl: "https://generativelanguage.googleapis.com/v1",
+      modelId: "chat-model",
+      providerType: "OPENAI_COMPATIBLE",
+    }, [{ role: "user", content: "hi" }]);
+
+    expect(result).toEqual({ content: "hello", tokenUsage: 17 });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://generativelanguage.googleapis.com/v1/chat/completions",
+      expect.objectContaining({
+        body: JSON.stringify({ model: "chat-model", messages: [{ role: "user", content: "hi" }] }),
+      }),
+    );
+  });
+
+  it("classifies provider failures and empty responses", async () => {
+    const chatConfig = { ...config, providerType: "OPENAI_COMPATIBLE" as const };
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("busy", { status: 429 }));
+    await expect(callChatProvider(chatConfig, [])).rejects.toThrow("provider_http_429");
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({ choices: [] }), { status: 200 }));
+    await expect(callChatProvider(chatConfig, [])).rejects.toThrow("provider_empty_response");
   });
 });
