@@ -1,20 +1,26 @@
 # Smart Chat
 
-Smart Chat 是一个计划使用 Next.js 构建的多人实时文字聊天室。用户可注册、登录、设置头像与昵称、浏览公开聊天室、创建或加入聊天室，并通过 `@大聪明` 在房间内调用本地 AI 服务。
+Smart Chat 是可自托管的多人实时聊天室。人和 Agent 同房间协作：注册登录、公开房间、结构化 `@` 提及、Supervisor 分流、文字与图片生成。模型密钥只留在服务端。
 
-当前阶段只包含产品与工程规划，不包含业务实现。
+现网基于 Next.js 16、React 19、Prisma 6、PostgreSQL，已可本地启动。Harness 与自建 Agent Runtime 正在把「单次 chat/completions」演进为可恢复、可审批、可核验的控制面 + 执行面。
 
-## 规划文档
+## 文档地图
 
-- [产品需求文档](docs/PRD.md)
-- [技术与实施方案](docs/IMPLEMENTATION_PLAN.md)
-- [测试规格](docs/TEST_SPEC.md)
+面向阅读的三份总览（含产品 / 技术 / Runtime 出图）：
 
-## V1 边界
+- [产品功能](PRODUCT_FEATURES.md)
+- [技术架构](TECHNICAL_ARCHITECTURE.md)
+- [AI 运行时架构](AI_RUNTIME_ARCHITECTURE.md)
 
-- 仅支持文字消息。
-- 房间目录公开；房间消息仅对已加入成员可见。
-- 每个房间默认包含系统 AI 成员“大聪明”。
-- AI 只在被结构化提及时响应。
-- AI 模型厂商配置仅由系统管理员维护，密钥只保存在服务端。
+设计与实施原文：
 
+- [产品需求](PRD.md)
+- [技术与实施方案](IMPLEMENTATION_PLAN.md)
+- [测试规格](TEST_SPEC.md)
+- [Agent Harness 设计](AGENT_HARNESS_DESIGN.md)
+- [自建 Agent Runtime 设计](SELF_HOSTED_AGENT_RUNTIME_DESIGN.md)
+- [ADR-001 Runtime 边界](adr/ADR-001-agent-runtime-boundary.md)
+
+## 本地启动
+
+见仓库根目录 [README.md](../README.md)。

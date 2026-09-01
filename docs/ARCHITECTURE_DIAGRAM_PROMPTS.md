@@ -1,0 +1,247 @@
+# Smart Chat 自建 Runtime 架构图 Prompt
+
+用途：根据 `docs/SELF_HOSTED_AGENT_RUNTIME_DESIGN.md` 生成底层架构图。  
+产品功能、方案与前后端技术栈图见 `docs/PRODUCT_DIAGRAM_PROMPTS.md`。  
+建议模型：Seedream 4.5 / Gemini 3 Pro Image / Reve（中英文标签混排时优先这三家）。  
+统一比例：总览与部署用 **16:9**；状态机、授权链、上下文布局用 **3:2** 或 **4:3**。
+
+先把下面「共用视觉规范」粘到每一张 prompt 前面，再粘该图正文。标签必须与方案字段一致，不要意译成别的英文。
+
+---
+
+## 共用视觉规范（每张都加）
+
+```text
+Professional software architecture diagram for an internal engineering design review.
+Flat 2D schematic, not isometric, not 3D, not isometric city, not infographic poster.
+White background, thin gray grid optional.
+Three layer colors only:
+- Control Plane: pale blue panels (#E8F1FA), navy labels
+- Runtime Plane: pale amber panels (#F7F1E1), dark brown labels
+- Data Plane: pale green panels (#E7F3EA), forest green labels
+Boxes are rounded rectangles with 1px borders, generous padding, no drop shadows, no gradients, no glow, no neon, no glassmorphism.
+Arrows are straight orthogonal (elbow) connectors with filled arrowheads. Dashed arrows mean wake/notify only. Solid arrows mean authoritative data or control.
+Typography: Inter or IBM Plex Sans. Mixed Chinese + English is allowed. English identifiers must be exact camelCase / SCREAMING_SNAKE as specified. No misspellings. No lorem ipsum. No icons of robots, brains, or mascots.
+High information density but uncluttered. Title in the top-left. Small caption in the bottom-left. Legend in the bottom-right.
+```
+
+负向（可作 negative prompt）：
+
+```text
+photorealistic, 3D render, isometric rooms, neon cyberpunk, gradient mesh, drop shadow, comic, infographic people, robot mascot, watermark, logo, QR code, blurry text, misspelled labels, overlapping unreadable text, rainbow colors, skeuomorphism
+```
+
+---
+
+## 图 1 · 三平面总架构
+
+**看什么：** Control / Runtime / Data 三层，以及 `TaskEnvelope` 如何把治理和执行切开。  
+**比例：** 16:9
+
+```text
+Title: "Smart Chat Self-hosted Agent Runtime — Three Planes"
+Top horizontal band labeled "Control Plane / 控制面". Inside it, eight equal modules in two rows:
+Row A: Chat API, Supervisor, Context Planner, Skill Registry
+Row B: Policy Snapshot, Scheduler, Approval API, Output Verifier
+A smaller strip on the right of the same band: Result Projector, Eval Harness
+A thick solid downward arrow in the center labeled "TaskEnvelope (frozen) + wake signal".
+A dashed downward arrow beside it labeled "queue / NOTIFY only".
+Middle horizontal band labeled "Runtime Plane / 执行面". Left-to-right pipeline:
+Dispatcher → Lease Guard → Agent Loop
+From Agent Loop, five downward branches to: Provider Adapter, Policy Engine, Sidecar Gate, Tool Executor, MCP Gateway
+A sixth branch to the right: Input Assembler
+A seventh branch to Event / Checkpoint Writer
+Bottom horizontal band labeled "Data Plane / 数据面" with three stores:
+PostgreSQL (runs, turns, events, calls, checkpoints, approvals) | Object Storage (artifacts) | Queue/Notify (wake-up only, not source of truth)
+Caption: "PostgreSQL is the source of truth. Queue only wakes workers."
+Legend: solid arrow = authoritative path; dashed arrow = wake signal.
+```
+
+---
+
+## 图 2 · Agent Loop 与完成权
+
+**看什么：** 单次 Run 内部 ReAct，以及模型不能自己宣布完成。  
+**比例：** 4:3
+
+```text
+Title: "Agent Loop Engine — Propose, Never Self-Complete"
+A left-to-right then looping flowchart on white:
+LOAD_TASK → DRAIN_INBOUND → BUILD_INPUT → MODEL_REQUEST → MODEL_RESPONSE
+From MODEL_RESPONSE two exits:
+1) tools: AUTHORIZE_TOOLS
+   AUTHORIZE_TOOLS fans into four outcomes stacked vertically: DENY, WAITING_APPROVAL, SIDECAR, EXECUTE_TOOLS
+   EXECUTE_TOOLS → APPEND_RESULTS → CHECK_LIMITS → CHECKPOINT, then a loop-back arrow to DRAIN_INBOUND
+2) no tools / model claims done: VERIFY_OUTPUT
+   VERIFY_OUTPUT fans into three: PROPOSE_COMPLETE, CONTINUE (loop back), BLOCKED
+Draw PROPOSE_COMPLETE as an amber Runtime box. A solid arrow leaves the Runtime band upward into a blue Control Plane box labeled "Output Verifier → project COMPLETED".
+Annotate in small type next to PROPOSE_COMPLETE: "Runtime must not write room-visible COMPLETED".
+A callout on the left: inbound events only drain at Turn boundary (new user message queued, cancel via AbortController).
+Do not draw a FINALIZE that marks SUCCEEDED inside Runtime.
+Caption: "Model proposes actions and completion. Control plane verifies and projects."
+```
+
+---
+
+## 图 3 · 工具授权链（Policy + Sidecar + 幂等）
+
+**看什么：** 模型只提议；确定性策略、Sidecar、人工审批、幂等键如何串起来。  
+**比例：** 16:9
+
+```text
+Title: "Tool Authorization Path"
+Swimlane diagram, four vertical lanes from left to right:
+Lane 1 "Untrusted / 不可信": User message, Attachment, Skill body, Model output, MCP response. All gray.
+Lane 2 "Model": Provider Adapter emits tool_calls only. Label: "intent, not permission".
+Lane 3 "Harness gates / 受控": a vertical stack of checks in this exact order, each a numbered box:
+1 Tool version + JSON Schema
+2 Agent capability + room permission
+3 Server-truth facts (amount, resource id, member) — model args are hints only
+4 Approval binding + budget
+5 Idempotency ledger (runId:toolCallId:argumentsDigest)
+6 Risk fork:
+   READ → execute
+   WRITE → Sidecar Gate (structured {toolId, version, arguments, risk, schemaDigest} only, no thinking text, 500ms, timeout escalates to approval, never fail-open)
+   DESTRUCTIVE or uncertain → WAITING_APPROVAL
+Lane 4 "World / 高敏": Tool Executor, MCP Gateway (schemaDigest, secretRef at call time), business DB. MCP labeled "tool source, not permission source". Outbound network default deny + host allowlist.
+A red stop box: "NON_IDEMPOTENT + outcome_unknown → BLOCKED, no auto replay".
+Caption: "Sidecar sees structured calls only. Credentials never enter TaskEnvelope."
+```
+
+---
+
+## 图 4 · ModelInputLayout（静态前缀 / 轨迹 / 状态栏）
+
+**看什么：** 眼睛如何组装；冻结不等于整包注入。  
+**比例：** 3:2
+
+```text
+Title: "BUILD_INPUT — ModelInputLayout"
+A tall stacked context window drawn like a document, top-to-bottom, left edge aligned:
+Band 1 (locked padlock, pale blue): "Static prefix, byte-stable across Turns"
+  contents: system policy, Agent Persona, frozen tool-name index, output contract
+  footnote: "timestamps / budget remaining MUST NOT live here"
+Band 2 (pale amber): "Trajectory, append-only"
+  contents: committed Turns, paired Tool Call + Tool Result, large results as summary + artifactRef
+  a small pair of linked boxes emphasizing pairing integrity
+Band 3 (dashed border, pale amber): "On-demand append, do not rewrite prefix"
+  contents: Skill body loaded this Turn, full tool schema loaded this Turn
+  side annotation table with two columns:
+    Freeze (audit): Skill catalog hash, MCP schemaDigest set, Policy Snapshot
+    Inject (model-visible): name+description catalog, tool-name index
+Band 4 (pale green, at the very bottom near the next token): "Status bar, rewritten by code each Turn"
+  key-value chips: now, turnIndex, budget remaining, tool counts, approval, children
+  footnote: "computed from checkpoint, never summarized by another LLM"
+Right side: a small KV-cache arrow showing prefix reuse. A forbidden icon on "sliding window".
+Caption: "Freeze versions. Inject on demand. Status bar is a code-maintained instrument."
+```
+
+---
+
+## 图 5 · Run 状态机与租约
+
+**看什么：** `AiRun` 生命周期、Turn 边界、谁可以写。  
+**比例：** 16:9
+
+```text
+Title: "AiRun State Machine"
+Clean orthogonal state diagram.
+States as rounded pills:
+PENDING → PREPARING → READY → CLAIMED → RUNNING
+From RUNNING, seven exits arranged to the right and below:
+WAITING_APPROVAL → READY
+PAUSED → READY
+RETRY_WAIT → READY
+WAITING_CHILDREN → READY
+VERIFYING → PROPOSED_COMPLETE → SUCCEEDED
+BLOCKED (terminal-ish)
+FAILED_FINAL (terminal)
+From CLAIMED and RUNNING a red arrow to CANCELLED
+Annotate:
+PREPARING = control plane freezing snapshot, not executable
+READY = TaskEnvelope complete
+RUNNING = only lease holder may write Turns and Tool Calls (runId + owner + leaseGeneration)
+WAITING_APPROVAL = release compute and lease, keep checkpoint
+PROPOSED_COMPLETE = runtime delivery proposal, not room success
+Add a small lease timeline under RUNNING: lease 60s, renew every 20s, idle watchdog 15–20s without delta kills generate.
+Caption: "Pause and resume at Turn boundaries. No HTTP stream continuation."
+```
+
+---
+
+## 图 6 · Checkpoint 与崩溃恢复
+
+**看什么：** 什么是恢复边界，非幂等未知如何停。  
+**比例：** 4:3
+
+```text
+Title: "Turn Commit, Checkpoint, Crash Recovery"
+Two stacked sequence rows.
+Top row "Happy path commit":
+Read full Provider response → transaction writes AgentRunTurn + thinking + usage + event → create PENDING AgentToolCall → update checkpoint (loadedSkillIds, loadedToolSchemaIds, inboundSequence, budgets) → commit
+Mark four legal checkpoint moments as green flags: after full model response, after a tool-result batch, before WAITING_APPROVAL, before PROPOSED_COMPLETE
+Mark streaming deltas as NOT a recovery boundary (gray, crossed).
+Bottom row "Worker crash":
+lease expires → new worker claim → verify digests → load checkpoint → check tool/result pairing (broken pair = repair or FAIL, never feed model) → pending tool calls:
+  known result → continue
+  keyed idempotent → retry with same key
+  NON_IDEMPOTENT and unknown → BLOCKED
+Rebuild BUILD_INPUT from snapshot + loaded set; unloaded items stay as index.
+Caption: "Queue is not the source of truth. Continuity = FULL | REBUILT | GAP."
+```
+
+---
+
+## 图 7 · 多 Agent DAG（进程隔离）
+
+**看什么：** 子任务不在 Loop 里偷偷 spawn；预算与验证在图上。  
+**比例：** 16:9
+
+```text
+Title: "Multi-Agent DAG — Process Isolation"
+Left: Control Plane Planner box emitting a DAG, not a chat roleplay.
+Center: Parent AiRun in state WAITING_CHILDREN.
+Three child boxes in parallel, each with its own mini stack: TaskEnvelope, lease, checkpoint, budget, tool ledger
+  Child A research
+  Child B data-analysis
+  Child C image-generation
+Planner allocates limits under parent ceiling (not all children maxTurns=12). Handoff notes: plan / execute / self-check.
+A barrier bar under the children. Then Aggregator that receives only structured results + Artifact refs, never full child logs. Child output origin = child_handoff.
+Then VERIFY_OUTPUT node (deterministic then optional Reviewer Run). Then Parent PROPOSED_COMPLETE.
+Dashed red arrows: cancel and budget exhaustion cascade parent → children.
+A forbidden stamp on "implicit subagent inside Runtime Loop".
+Caption: "Shared protocol, isolated context. Completion still verified outside the executor."
+```
+
+---
+
+## 图 8 · 信任分层、MCP 与部署
+
+**看什么：** 不可信 / 受控 / 高敏，以及进程如何拆开。  
+**比例：** 16:9
+
+```text
+Title: "Trust Boundaries and Deployment"
+Split canvas into left trust diagram and right deployment.
+Left — three concentric or stacked trust zones:
+Untrusted (red-tinted, not neon): user messages, attachments, Skill, model output, MCP responses, memory, retrieval, child_handoff
+Controlled (blue): TaskEnvelope, Policy Snapshot, Tool Registry, Sidecar, Output Verifier, Runtime Worker
+High-sensitivity (green): Provider/MCP credentials, admin policy, business DB, eval gates
+Annotations: ContentPart.origin; only system_policy and planner-marked user objective are instructional. Fatal triad check for MCP packs: private data + untrusted content + outbound comms. Outbound default deny.
+Right — deployment boxes in a row:
+smart-chat-web (Next.js Control Plane, horizontal scale)
+smart-chat-worker (schedule, verify, project results)
+agent-runtime-worker (Agent Loop, low-privilege DB role, no user cookies, no admin DB)
+postgres (authoritative state)
+object-storage (artifacts)
+CODE_RUNTIME shown as a separate dashed sandbox (Phase 5): per-run container, non-root, network off, no host FS, no Docker socket. Ordinary runtime workers must not gain host shell.
+Caption: "Harness spans control plane and runtime. Eval gates are not writable by the loop."
+```
+
+---
+
+## 出图顺序建议
+
+先出 **图 1、图 2、图 4、图 3**，这四张能讲清方案；评审或对外再补 **图 5–8**。
+
+同一套图不要换配色。若模型把英文标识拼错，把该图失败的标签列表贴回去，加一句：`Keep these identifiers byte-exact: TaskEnvelope, AiRun, PROPOSED_COMPLETE, schemaDigest, secretRef, ModelInputLayout, WAITING_APPROVAL, leaseGeneration.`

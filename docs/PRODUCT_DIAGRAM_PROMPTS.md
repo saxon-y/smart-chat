@@ -1,0 +1,397 @@
+# Smart Chat 产品功能 / 方案 / 技术栈 出图 Prompt
+
+配套：底层 Runtime 架构图见 `docs/ARCHITECTURE_DIAGRAM_PROMPTS.md`。  
+依据：`docs/PRD.md`、`docs/IMPLEMENTATION_PLAN.md`、`docs/AGENT_HARNESS_DESIGN.md`、`docs/SELF_HOSTED_AGENT_RUNTIME_DESIGN.md`、现网 `README.md`。
+
+建议模型：Seedream 4.5 / Gemini 3 Pro Image / Reve。  
+功能图、方案图用 **16:9**；技术栈分层用 **4:3** 或 **3:2**。
+
+每张图先粘对应「共用视觉规范」，再粘该图正文。产品名写 **Smart Chat**。英文标识保持方案原词，不要画厂商 Logo 图形（只用文字：Next.js、Prisma、PostgreSQL）。
+
+负向（三类图通用）：
+
+```text
+photorealistic, 3D render, isometric rooms, neon cyberpunk, gradient mesh, drop shadow, comic characters, robot mascot, watermark, logo mark, QR code, blurry text, misspelled labels, overlapping unreadable text, rainbow colors, skeuomorphism, app store screenshot mock with fake OS chrome
+```
+
+---
+
+## A. 产品功能描述图
+
+看的人：用户、管理员、评审。画「能做什么」，不要画 Worker 内部状态名。
+
+### A 共用视觉规范
+
+```text
+Product feature diagram for Smart Chat, a self-hosted multiplayer chat product.
+Flat 2D product map, not a screenshot, not a phone mockup, not isometric.
+Off-white background (#FAFAF8). Accent: one ink blue (#1F4E79) for primary features, muted teal (#2F6F6A) for AI/Agent features, warm gray for supporting features.
+Rounded feature cards with 1px borders, no shadows, no gradients.
+Chinese labels preferred for user-facing names; keep English identifiers in parentheses when they are domain terms: Room, Agent, Skill, MCP, AiRun.
+Typography: Source Han Sans / Noto Sans SC + Inter. Title top-left, caption bottom-left, legend bottom-right.
+No cartoon people. Small simple line icons allowed (chat bubble, at-sign, image, shield) as 16px line icons only.
+```
+
+### 图 A1 · 产品能力全景
+
+**比例：** 16:9
+
+```text
+Title: "Smart Chat 产品能力全景"
+A 2x3 grid of large feature cards plus a thin bottom strip.
+Card 1 身份与资料: 邮箱注册/登录/退出, 昵称与头像, HttpOnly Session, 角色 USER / ADMIN
+Card 2 房间协作: 公开房间目录, 创建/加入/退出, 邀请与入群申请, 成员列表, OWNER / MODERATOR / MEMBER
+Card 3 实时文字聊天: 文字消息, 结构化 @提及, 表情, 断线按 sequence 补齐, clientId 去重
+Card 4 多 Agent 房间: 人类与 ASSISTANT 同房间, 总管 Supervisor, @指定 Agent, CHAT / IMAGE 专职
+Card 5 生成与产物: 文字回复, Gemini/OpenAI 图片, Artifact 需登录与房间权限读取
+Card 6 治理后台: 用户/角色, Agent, 模型与密钥, Skills, 运行监控, 审计日志, 入群审批
+Bottom strip 明确不做（灰、虚线）: 通用编码 IDE, 模型训练, 浏览器持有 API Key, 跨房间偷上下文
+Caption: "自托管多人聊天室。AI 是房间成员，不是外挂对话框。"
+```
+
+### 图 A2 · 房间里怎么叫 Agent
+
+**比例：** 16:9
+
+```text
+Title: "房间协作：提及、总管、专职 Agent"
+Left: a simplified chat room composition (not a pixel UI):
+- left rail: room list (大厅, 产品实验室)
+- center: message timeline with three bubbles
+  1 human "帮我出一张封面"
+  2 human with structured mention "@风景师"
+  3 AI image result as an artifact card
+- right rail: members, humans + 大聪明 + 漫画师 + 人像师 + 风景师 + Supervisor
+Right: a vertical decision flow, exact rules:
+1 用户发消息并持久化（先落库，失败也不回滚）
+2 无结构化 @Agent → 不触发 AI
+3 @普通成员 → 只通知，不触发 AI
+4 @指定 Agent → 绕过总管，DIRECT AiRun
+5 无显式 @ 但房间需要自动分流 → Supervisor 只从本房间已加入 Agent 中选择能力匹配者
+6 IMAGE Agent 绑定 OPENAI_IMAGES 或 GEMINI_IMAGES；比例 1:1 / 3:2 / 2:3 原样传给模型
+Caption: "上下文主键是 Room + Message Thread + AiRun。不跨房间检索。"
+```
+
+### 图 A3 · 管理员能配置什么
+
+**比例：** 16:9
+
+```text
+Title: "管理后台功能"
+Seven equal tiles matching the real admin tabs, Chinese names exact:
+用户管理, 角色管理, Agent 管理, 模型配置, Skills 管理, 运行监控, 入群申请
+Plus a separate tile: 审计 /admin/audit
+Under 模型配置 list: OpenAI-compatible chat, OPENAI_IMAGES, GEMINI_IMAGES, 健康检查, AES-256-GCM 加密密钥, 密钥只写不可读, host allowlist 防 SSRF
+Under Agent 管理 list: SUPERVISOR / CHAT / IMAGE, 绑定模型, 加入房间
+Under Skills 管理 list: SKILL.md Bundle, 版本 hash（规划能力）
+Under 运行监控 list: AiRun 状态, 取消, 重试
+A red callout: 管理员不会因角色自动获得所有房间消息读取权。普通用户访问 /admin API = 403。
+Caption: "配置与密钥留在服务端。浏览器只看到脱敏结果。"
+```
+
+### 图 A4 · 用户权限矩阵
+
+**比例：** 4:3
+
+```text
+Title: "谁能做什么"
+A clean matrix table, three columns: 未登录访客 | 普通用户 | 系统管理员
+Rows:
+查看公开房间目录 — 是 / 是 / 是
+阅读房间消息 — 否 / 仅已加入 / 仅已加入
+创建加入退出房间 — 否 / 是 / 是
+发送文字与提及 — 否 / 是 / 是
+修改自己的头像昵称 — 否 / 是 / 是
+管理 AI 厂商与密钥 — 否 / 否 / 是
+查看配置变更审计 — 否 / 否 / 是
+审批高风险工具（规划） — 否 / 房间角色或管理员 / 是
+Highlight the row "阅读房间消息" with a note: ADMIN 不是超级读者。
+Caption: "服务端对每个受保护动作重新鉴权。"
+```
+
+### 图 A5 · 一条消息的用户体验
+
+**比例：** 16:9
+
+```text
+Title: "从说到结果：用户可感知的链路"
+Horizontal storyboard, five panels, product language not internal enums:
+1 输入: 键盘 @ 弹出房间成员选择器（含 Agent），支持中文输入法
+2 发送: 消息立刻出现，带发送中/已发送；同一 clientId 重试不重复
+3 受理: 状态条「大聪明 / 风景师 正在处理」，可取消
+4 进行: 流式文字或「正在生成图片」；审批时出现「等待管理员确认」而不是假进度
+5 交付: 文字气泡或受保护的图片 Artifact；失败保留原消息并提供重试
+A small under-row of error states: 超时, 限流, 模型不可用, 权限不足 — 用户消息仍在。
+Caption: "AI 与用户消息解耦。失败不吞用户发言。"
+```
+
+---
+
+## B. 产品方案设计图
+
+看的人：产品 + 技术评审。画「怎么做成一个可自托管的控制面」，连接现网与目标 Harness。
+
+### B 共用视觉规范
+
+```text
+Product solution architecture for Smart Chat.
+Flat 2D schematic. White background.
+Reuse the three-plane palette from the engineering diagrams so sets can sit together:
+- Product / Web: pale slate (#EEF1F4)
+- Control Plane: pale blue (#E8F1FA)
+- Runtime Plane: pale amber (#F7F1E1)
+- Data Plane: pale green (#E7F3EA)
+Rounded rectangles, 1px borders, orthogonal arrows. Solid = authoritative. Dashed = wake/notify.
+Chinese + exact English identifiers: TaskEnvelope, AiRun, Supervisor, Skill, MCP, Artifact.
+No vendor mascots. No 3D. Title top-left, caption bottom-left, legend bottom-right.
+```
+
+### 图 B1 · 产品方案总览
+
+**比例：** 16:9
+
+```text
+Title: "Smart Chat 产品方案：聊天室即 Agent 控制面"
+Four layers top to bottom:
+Layer 1 使用场景: 小型团队 / 社区自托管, 同一房间里人和 Agent 对话
+Layer 2 产品对象: Room, Member(USER|ASSISTANT), Message, Artifact, 审批与审计
+Layer 3 控制面: Supervisor 选人, Context Planner 选上下文, Skill Registry, MCP Registry, Policy, Scheduler, Output Verifier, Result Projector
+Layer 4 执行面分叉:
+  左 Embedded Runtime: OpenAI-compatible + Gemini 图片 + 业务工具, 聊天/图片/短 MCP
+  右 Daemon Runtime: Claude Code / Codex / 容器, 长任务与未来 CODE_RUNTIME
+Center downward contract labeled TaskEnvelope (frozen). Return path: RunEvent / Artifact / PROPOSED_COMPLETE → 控制面投影为房间消息.
+Caption: "不重写厂商 CLI。房间业务不感知 Claude / Codex / Gemini 私有协议。"
+```
+
+### 图 B2 · 端到端方案（一句话如何变成一次 Run）
+
+**比例：** 16:9
+
+```text
+Title: "端到端方案：消息 → AiRun → 房间可见结果"
+Left-to-right sequence:
+Browser ChatWorkspace
+→ Next.js Route Handler (membership, mention, CSRF)
+→ 同一事务: Message + structured mentions + Outbox(AI_MENTIONED)
+→ 唤醒 Worker（LISTEN/NOTIFY 或短轮询，虚线）
+→ Supervisor 或 DIRECT 路由
+→ 冻结 TaskEnvelope（Agent, model, Context, Skill, MCP, Policy, limits）
+→ Runtime claim + lease
+→ Agent Loop / Provider / Tools
+→ VERIFY_OUTPUT
+→ PROPOSED_COMPLETE
+→ Result Projector 写 AI Message + Artifact
+→ SSE/outbox 推回房间成员
+Annotations:
+- 用户消息先持久化
+- 每个 triggerMessage 最多一个有效 AiRun
+- COMPLETED 只能由控制面投影
+- 密钥与 Cookie 不进入 TaskEnvelope
+Caption: "PostgreSQL 是事实来源。队列只负责叫醒 Worker。"
+```
+
+### 图 B3 · 双 Runtime 与交付物
+
+**比例：** 16:9
+
+```text
+Title: "两类 Runtime，同一套房间协议"
+A fork under one Control Plane.
+Left box Embedded Runtime Worker: 适合文字 Agent、图片生成、短时 MCP function calling。交付: 文本, 图片 Artifact。
+Right box Runtime Daemon (local / container / VM): 适合 Claude Code, Codex, 终端, 文件系统。交付: 文本, 文档, 代码工作区（Phase 5）。
+Both sides consume the same TaskEnvelope and emit the same RunEvent / RunResult.
+A table under the fork, three columns 场景 | Runtime | 为什么:
+聊天问答 | Embedded | 低延迟, 无宿主 Shell
+封面/人像/风景 | Embedded Gemini/OpenAI Images | 专用 IMAGE Agent
+业务只读查询 | Embedded + MCP | schemaDigest + 房间权限
+高风险写入 | Embedded + 审批 | WAITING_APPROVAL
+编码与仓库 | Daemon CODE_RUNTIME | 独立容器, 默认断网
+Caption: "第一阶段不做通用编码 IDE。WorkspaceSpec 现在冻结。"
+```
+
+### 图 B4 · 上下文与权限方案
+
+**比例：** 4:3
+
+```text
+Title: "看见什么、允许做什么"
+Two columns.
+Left 观察空间 Context Planner:
+安全策略 → Agent Persona → 当前任务 → Skill 目录 → 引用消息/附件 → 最近相关消息 → 房间摘要 → 父任务结构化结果 → 工具结果
+Note: 不拼接整个房间历史。工具调用与结果成对。memory/检索无指令效力。
+Right 动作空间 Policy:
+allowedTools / deniedTools / approvalTools / allowedHosts
+模型只提议。Policy + Sidecar + 人工审批决定执行。
+MCP 是工具来源不是权限来源。secretRef 调用时解析。
+Bottom bar: 冻结版本 vs 按需注入。默认只给 Skill name+description 和工具名索引。
+Caption: "接口由系统定义，不由模型声称。"
+```
+
+### 图 B5 · 分阶段产品路线
+
+**比例：** 16:9
+
+```text
+Title: "产品方案演进"
+A horizontal roadmap, six stations, no Gantt clutter:
+现网 V1: 文字房间 + @大聪明 + 单次 chat/completions
+现网增强: Supervisor, IMAGE Agent, Artifact, Skills 配置, 独立 worker
+Harness Phase 0–1: TaskEnvelope, 可恢复 AiRun, 状态栏, 评测金样
+Phase 2: 受控工具, 审批, Sidecar, 完成核验
+Phase 3: Context 压缩, Skill hash, MCP Gateway
+Phase 4–5: 多 Agent DAG, 可选 CODE_RUNTIME 沙箱
+Under each station a one-line user value:
+能在房间里问 AI / 能分流出图 / 长任务可取消可恢复 / 写操作可拦可审 / 可接企业工具 / 可并行调研且编码隔离
+Gray box 非目标: Runtime 自动改 Policy/Skill, 模型后训练, token 级实时打断
+Caption: "方向认同，节奏务实。评估与执行协议同步建设。"
+```
+
+---
+
+## C. 技术栈图（含前后端）
+
+看的人：工程师。画真实技术选型，区分现网已落地与规划中。
+
+### C 共用视觉规范
+
+```text
+Technology stack diagram for Smart Chat.
+Flat layered architecture poster, white background.
+Layers from top to bottom like a classic stack, each layer a horizontal band with a muted color:
+Presentation #EEF1F4, BFF/API #E8F1FA, Domain #F7F1E1, Data #E7F3EA, Infra #F3EEE6
+Boxes contain library and product names as text only, never official logo artwork.
+Mark items with tiny pills: 现网, 规划, 可选
+Chinese layer titles + English package names exact: Next.js 16, React 19, Tailwind CSS 4, Radix UI, Prisma 6, PostgreSQL, Vitest, SSE.
+Orthogonal arrows. Title top-left, caption bottom-left, legend for 现网/规划/可选.
+```
+
+### 图 C1 · 全栈分层技术栈
+
+**比例：** 4:3
+
+```text
+Title: "Smart Chat 技术栈（前后端）"
+Six stacked bands:
+1 客户端: Next.js App Router, React 19 Client Components（ChatWorkspace, AdminConsole）, Tailwind CSS 4, Radix UI, lucide-react, EventSource/SSE
+2 应用入口: next dev/start 页面 /chat /admin /settings /login /register；Route Handlers 在 src/app/api
+3 领域服务: src/lib/auth（Argon2id, jose JWT/session）, src/lib/chat, src/lib/ai（routing, providers, artifacts, secrets AES-256-GCM）, src/lib/harness（规划）
+4 执行进程: Next.js Node runtime；独立 agent-runtime-worker（规划/部分现网 scripts/agent-worker.ts）；Eval Harness（规划）
+5 数据: PostgreSQL + Prisma 6 权威状态；Transactional Outbox；本地 Artifact 卷 ARTIFACT_STORAGE_BACKEND=local；Redis 可选（多实例 pub/sub 与限流，规划）
+6 模型与工具: OpenAI-compatible 网关, Gemini generateContent, MCP Gateway（规划）, 未来 CODE_RUNTIME 容器
+Side note: 单体仓库，web / worker 多 entrypoint。密钥不得序列化进 Client Component。
+Caption: "PostgreSQL is source of truth. Redis/queue are not."
+```
+
+### 图 C2 · 前端信息架构
+
+**比例：** 16:9
+
+```text
+Title: "前端页面与组件"
+Left sitemap:
+/ 登录引导
+/login /register
+/chat ChatWorkspace: 房间列表, 成员轨, 消息流, 输入框, @ picker, 表情, 运行状态, 取消/重试
+/settings/profile /settings/preferences
+/admin AdminConsole tabs: 用户, 角色, Agent, 模型, Skills, 运行监控, 入群申请
+/admin/audit
+Right component map:
+src/components/ChatWorkspace.tsx, AuthForm.tsx, SettingsPage.tsx
+src/components/admin/* Tab
+src/components/ui/* shadcn-style Radix primitives
+src/components/api.ts 浏览器 API 客户端
+Data fetching: fetch to /api/* with cookie session; room events via GET /api/rooms/:roomId/events SSE
+Mark: 无全局状态库（无 Redux/Zustand 作为现网核心）。Server Components 默认，聊天为 Client.
+Caption: "前端只持有 Session Cookie。模型密钥永不下发。"
+```
+
+### 图 C3 · 后端模块与 API
+
+**比例：** 16:9
+
+```text
+Title: "后端模块与 HTTP 面"
+Three columns.
+Column 1 Auth: POST /api/auth/register login logout, GET/PATCH /api/me, avatars；Argon2id, HttpOnly cookie, CSRF/origin
+Column 2 Chat: GET/POST /api/rooms, members, invitations, join-requests, messages, events SSE, artifacts/:id
+Column 3 AI & Admin: runs, cancel, retry, supervisor, room agents；/api/admin/users roles agents models skills agent-runs audit-logs room-join-requests；internal /api/internal/agent-worker + AGENT_WORKER_SECRET
+Bottom domain boxes aligned to folders:
+src/lib/auth/session.ts guards.ts permissions.ts
+src/lib/chat/events.ts ai-trigger.ts
+src/lib/ai/service.ts routing.ts providers.ts artifact-storage.ts secrets.ts provider-security.ts
+src/lib/harness/* 规划: protocol context skills policy verify eval scheduler
+Caption: "服务端权威。mention、membership、admin 均在服务端校验。"
+```
+
+### 图 C4 · 数据、实时与 Worker
+
+**比例：** 16:9
+
+```text
+Title: "数据面、Outbox 与实时"
+Center: PostgreSQL models as a compact map: User Session Room RoomMember Message MessageMention AiRun Agent Artifact OutboxEvent AuditLog
+Write path: API transaction → rows + outbox_events → commit → wake worker
+Read/live path: SSE GET /api/rooms/:roomId/events；重连用 lastAckedSequence 补齐；clientId 去重
+Worker path: claim AiRun by leaseGeneration → provider call → persist AI message → project
+Dashed: PostgreSQL LISTEN/NOTIFY or short poll. Optional Redis pub/sub only for multi-instance fanout.
+Artifact: local volume ARTIFACT_STORAGE_DIR, authz on /api/artifacts/:id
+Caption: "LISTEN/NOTIFY 只唤醒。replay 以数据库 sequence 为准。"
+```
+
+### 图 C5 · 现网部署拓扑
+
+**比例：** 16:9
+
+```text
+Title: "部署与进程（现网 + 目标）"
+Boxes:
+Browser
+Reverse proxy (WebSocket/SSE, disable response buffering)
+smart-chat-web: Next.js 16, 水平扩展
+smart-chat-worker: npm run worker, 相同源码, AGENT_WORKER_SECRET, AGENT_WORKER_URL 指向 app 内部
+agent-runtime-worker: 目标独立 Agent Loop（低权限 DB 角色）
+postgres
+shared private artifact volume
+Optional: Redis, object storage S3（未启用）
+CODE_RUNTIME dashed sandbox
+Env secrets listed as text not values: DATABASE_URL, AI_CONFIG_ENCRYPTION_KEY, AGENT_WORKER_SECRET, AI_PROVIDER_HOST_ALLOWLIST, ARTIFACT_STORAGE_DIR
+Compose note: docker compose postgres; profile worker
+Caption: "生产必须独立 worker，禁止只靠 Next.js 请求内同步调模型。"
+```
+
+### 图 C6 · 前端到模型的调用栈
+
+**比例：** 4:3
+
+```text
+Title: "一次 @Agent 的技术调用栈"
+Vertical sequence, each step names the actual module:
+ChatWorkspace send
+→ POST /api/rooms/:roomId/messages
+→ src/lib/chat validation + membership
+→ Prisma transaction: Message, MessageMention, AiRun, OutboxEvent
+→ 201 returns user message
+→ worker claim src/lib/ai/service.ts (现网) 或 runtime loop（目标）
+→ src/lib/ai/routing.ts Supervisor or DIRECT
+→ src/lib/ai/providers.ts OpenAI-compatible or Gemini Images
+→ AES-256-GCM decrypt secret server-side
+→ host allowlist
+→ persist response + Artifact
+→ SSE ai.completed
+→ ChatWorkspace mergeMessage
+Side annotations: 浏览器无 API Key；图片比例 1:1 3:2 2:3；失败状态可 retry 接口
+Caption: "同一条产品路径，现网与自建 Runtime 替换的是中间执行段。"
+```
+
+---
+
+## 出图顺序建议
+
+| 用途 | 先出 |
+| --- | --- |
+| 给业务/评审讲产品 | A1、A2、A5、B1 |
+| 给方案评审 | B2、B3、B5、A4 |
+| 给研发/架构 | C1、C2、C3、C5 |
+| 和技术架构图成套 | B1 配 Runtime 图 1；C6 配 Runtime 图 2 |
+
+功能图用 A 规范（墨蓝 + 青绿），方案图用 B 规范（与底层架构三平面同色），技术栈用 C 规范（分层色带）。三套可以并排，不要混用霓虹色。
