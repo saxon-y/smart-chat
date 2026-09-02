@@ -36,6 +36,23 @@ services:
     volumes:
       - smart-chat-artifacts:/app/.data
 
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?PUBLIC_HOST must be set in .env}
+    depends_on:
+      web:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - smart-chat-caddy-data:/data
+      - smart-chat-caddy-config:/config
+
   worker:
     profiles: [worker]
     image: smart-chat:${SMART_CHAT_IMAGE_TAG:-latest}
@@ -81,3 +98,5 @@ services:
 volumes:
   smart-chat-postgres:
   smart-chat-artifacts:
+  smart-chat-caddy-data:
+  smart-chat-caddy-config:

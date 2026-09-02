@@ -6,8 +6,7 @@
 
 ```text
 公网 :443
-  -> 宿主机 Caddy
-  -> 127.0.0.1:3000
+  -> caddy 容器
   -> web 容器 :3000
   -> postgres 容器 :5432
 
@@ -179,12 +178,18 @@ Worker 在容器内使用 `http://web:3000/api/internal/agent-worker`，不再�
 
 ## 8. HTTPS 反向代理
 
-Caddy 仍运行在宿主机，因为 Web 只映射到宿主机回环地址。假设公网 IP 是 `43.123.45.67`：
+Caddy 由 Compose 运行，通过 Docker 网络直接访问 `web:3000`。假设公网 IP 是 `43.123.45.67`，在 `.env` 配置：
+
+```env
+PUBLIC_HOST="43-123-45-67.sslip.io"
+```
+
+Caddy 配置位于 `deploy/Caddyfile`：
 
 ```caddy
 43-123-45-67.sslip.io {
     encode zstd gzip
-    reverse_proxy 127.0.0.1:3000
+    reverse_proxy web:3000
 
     header {
         Strict-Transport-Security "max-age=31536000"
@@ -194,11 +199,11 @@ Caddy 仍运行在宿主机，因为 Web 只映射到宿主机回环地址。假
 }
 ```
 
-应用配置并检查：
+启动并检查：
 
 ```bash
-sudo caddy validate --config /etc/caddy/Caddyfile
-sudo systemctl reload caddy
+docker compose up -d caddy
+docker compose logs --tail=100 caddy
 curl -I https://43-123-45-67.sslip.io
 ```
 

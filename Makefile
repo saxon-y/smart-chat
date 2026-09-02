@@ -31,6 +31,7 @@ check:
 	@docker compose version >/dev/null 2>&1 || { echo 'ERROR: docker compose is unavailable'; exit 1; }
 	@test -f .env || { echo 'ERROR: .env is missing; run cp .env.example .env and configure production secrets'; exit 1; }
 	@grep -Eq '^POSTGRES_PASSWORD=.+$$' .env || { echo 'ERROR: POSTGRES_PASSWORD is missing from .env'; exit 1; }
+	@grep -Eq '^PUBLIC_HOST=.+$$' .env || { echo 'ERROR: PUBLIC_HOST is missing from .env'; exit 1; }
 	@grep -Eq '^SESSION_SECRET=.{32,}$$' .env || { echo 'ERROR: SESSION_SECRET must be at least 32 characters'; exit 1; }
 	@grep -Eq '^AI_CONFIG_ENCRYPTION_KEY=.{32,}$$' .env || { echo 'ERROR: AI_CONFIG_ENCRYPTION_KEY must be at least 32 characters'; exit 1; }
 	@grep -Eq '^AGENT_WORKER_SECRET=.{32,}$$' .env || { echo 'ERROR: AGENT_WORKER_SECRET must be at least 32 characters'; exit 1; }
@@ -49,11 +50,11 @@ migrate: db-up build
 	$(COMPOSE) run --rm web npx prisma migrate deploy
 
 deploy: migrate
-	$(WORKER_COMPOSE) up -d postgres web worker
+	$(WORKER_COMPOSE) up -d postgres web worker caddy
 	@$(MAKE) --no-print-directory status
 
 deploy-web: migrate
-	$(COMPOSE) up -d postgres web
+	$(COMPOSE) up -d postgres web caddy
 	@$(MAKE) --no-print-directory status
 
 redeploy:
@@ -67,7 +68,7 @@ status:
 	$(WORKER_COMPOSE) ps
 
 logs:
-	$(WORKER_COMPOSE) logs -f --tail=100 web worker postgres
+	$(WORKER_COMPOSE) logs -f --tail=100 caddy web worker postgres
 
 logs-web:
 	$(COMPOSE) logs -f --tail=100 web

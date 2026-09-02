@@ -36,6 +36,7 @@ docker compose version >/dev/null 2>&1 || fail "docker compose is unavailable"
 test -f .env || fail ".env is missing"
 
 grep -Eq '^POSTGRES_PASSWORD=.+$' .env || fail "POSTGRES_PASSWORD is missing from .env"
+grep -Eq '^PUBLIC_HOST=.+$' .env || fail "PUBLIC_HOST is missing from .env"
 for variable in SESSION_SECRET AI_CONFIG_ENCRYPTION_KEY AGENT_WORKER_SECRET; do
   grep -Eq "^${variable}=.{32,}$" .env || fail "${variable} must be at least 32 characters"
 done
@@ -68,8 +69,8 @@ docker compose build web
 log "applying database migrations"
 docker compose run --rm web npx prisma migrate deploy
 
-log "recreating web and worker containers"
-docker compose --profile worker up -d --force-recreate postgres web worker
+log "recreating public gateway, web, and worker containers"
+docker compose --profile worker up -d --force-recreate postgres web worker caddy
 
 log "waiting for local web endpoint"
 published_port="$(docker compose port web 3000 | sed -n 's/.*://p' | tail -n 1)"
@@ -93,6 +94,7 @@ running_services="$(docker compose --profile worker ps --status running --servic
 grep -qx 'web' <<<"$running_services" || fail "web container is not running"
 grep -qx 'worker' <<<"$running_services" || fail "worker container is not running"
 grep -qx 'postgres' <<<"$running_services" || fail "postgres container is not running"
+grep -qx 'caddy' <<<"$running_services" || fail "caddy container is not running"
 
 log "redeploy completed"
 docker compose --profile worker ps
