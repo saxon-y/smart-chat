@@ -38,6 +38,7 @@ enum RoomRole {
   MODERATOR
   OWNER
 }
+
 enum RoomJoinRequestStatus {
   PENDING
   APPROVED
@@ -45,6 +46,7 @@ enum RoomJoinRequestStatus {
   CANCELLED
   EXPIRED
 }
+
 enum RoomInvitationStatus {
   PENDING
   ACCEPTED
@@ -101,25 +103,25 @@ enum AuditResult {
 }
 
 model User {
-  id           String       @id @default(cuid())
-  email        String       @unique
-  passwordHash String
-  displayName  String
-  avatarKey    String?
-  role         UserRole     @default(USER)
-  status       UserStatus   @default(ACTIVE)
-  roleId       String?
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-  sessions     Session[]
-  memberships  RoomMember[]
-  roomsCreated Room[]       @relation("RoomCreator")
-  auditLogs    AuditLog[]
-  assignedRole Role?        @relation(fields: [roleId], references: [id], onDelete: SetNull)
-  joinRequests RoomJoinRequest[]
+  id                   String            @id @default(cuid())
+  email                String            @unique
+  passwordHash         String
+  displayName          String
+  avatarKey            String?
+  role                 UserRole          @default(USER)
+  status               UserStatus        @default(ACTIVE)
+  roleId               String?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  sessions             Session[]
+  memberships          RoomMember[]
+  roomsCreated         Room[]            @relation("RoomCreator")
+  auditLogs            AuditLog[]
+  assignedRole         Role?             @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  joinRequests         RoomJoinRequest[]
   reviewedJoinRequests RoomJoinRequest[] @relation("JoinRequestReviewer")
-  invitationsSent RoomInvitation[] @relation("InvitationInviter")
-  invitationsReceived RoomInvitation[] @relation("InvitationInvitee")
+  invitationsSent      RoomInvitation[]  @relation("InvitationInviter")
+  invitationsReceived  RoomInvitation[]  @relation("InvitationInvitee")
 }
 
 model Session {
@@ -135,23 +137,23 @@ model Session {
 }
 
 model Room {
-  id           String          @id @default(cuid())
+  id           String            @id @default(cuid())
   name         String
-  slug         String          @unique
-  visibility   RoomVisibility  @default(PUBLIC)
-  status       RoomStatus      @default(ACTIVE)
+  slug         String            @unique
+  visibility   RoomVisibility    @default(PUBLIC)
+  status       RoomStatus        @default(ACTIVE)
   createdById  String
-  lastSequence Int             @default(0)
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
-  createdBy    User            @relation("RoomCreator", fields: [createdById], references: [id])
+  lastSequence Int               @default(0)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  createdBy    User              @relation("RoomCreator", fields: [createdById], references: [id])
   members      RoomMember[]
   messages     Message[]
   supervisor   RoomSupervisor?
   aiRuns       AiRun[]
   outboxEvents OutboxEvent[]
   joinRequests RoomJoinRequest[]
-  invitations RoomInvitation[]
+  invitations  RoomInvitation[]
 
   @@index([visibility, status, updatedAt])
 }
@@ -180,35 +182,37 @@ model RoomMember {
 }
 
 model RoomJoinRequest {
-  id String @id @default(cuid())
-  roomId String
-  userId String
-  status RoomJoinRequestStatus @default(PENDING)
-  reason String?
+  id           String                @id @default(cuid())
+  roomId       String
+  userId       String
+  status       RoomJoinRequestStatus @default(PENDING)
+  reason       String?
   reviewedById String?
-  reviewedAt DateTime?
+  reviewedAt   DateTime?
   reviewReason String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  reviewedBy User? @relation("JoinRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+  room         Room                  @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user         User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy   User?                 @relation("JoinRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
   @@index([roomId, status, createdAt])
   @@index([userId, status, createdAt])
 }
 
 model RoomInvitation {
-  id String @id @default(cuid())
-  roomId String
-  inviterId String
-  inviteeId String
-  status RoomInvitationStatus @default(PENDING)
-  expiresAt DateTime?
-  createdAt DateTime @default(now())
+  id          String               @id @default(cuid())
+  roomId      String
+  inviterId   String
+  inviteeId   String
+  status      RoomInvitationStatus @default(PENDING)
+  expiresAt   DateTime?
+  createdAt   DateTime             @default(now())
   respondedAt DateTime?
-  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  inviter User @relation("InvitationInviter", fields: [inviterId], references: [id], onDelete: Cascade)
-  invitee User @relation("InvitationInvitee", fields: [inviteeId], references: [id], onDelete: Cascade)
+  room        Room                 @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  inviter     User                 @relation("InvitationInviter", fields: [inviterId], references: [id], onDelete: Cascade)
+  invitee     User                 @relation("InvitationInvitee", fields: [inviteeId], references: [id], onDelete: Cascade)
+
   @@index([roomId, status])
   @@index([inviteeId, status])
 }
@@ -252,11 +256,11 @@ model MessageMention {
 }
 
 model AiRun {
-  id                         String        @id @default(cuid())
+  id                         String               @id @default(cuid())
   triggerMessageId           String
   roomId                     String
   callerMemberId             String
-  mode                       AiRunMode     @default(DIRECT)
+  mode                       AiRunMode            @default(DIRECT)
   parentRunId                String?
   targetAgentId              String?
   targetMemberId             String?
@@ -265,46 +269,52 @@ model AiRun {
   decision                   String?
   decisionConfidence         Float?
   decisionReasonCode         String?
-  authorizationPolicyVersion Int           @default(1)
+  authorizationPolicyVersion Int                  @default(1)
   providerConfigVersion      Int?
   runtimeId                  String?
   runtimeKind                String?
   runtimeVersion             String?
   taskDigest                 String?
-  contextGeneration          Int           @default(0)
+  contextGeneration          Int                  @default(0)
   skillBundleHash            String?
   mcpBundleDigest            String?
-  checkpointSequence         Int           @default(0)
+  checkpointSequence         Int                  @default(0)
   cancelRequestedAt          DateTime?
   blockedReason              String?
   requestId                  String
-  idempotencyKey             String?       @unique
-  status                     AiRunStatus   @default(PENDING)
+  idempotencyKey             String?              @unique
+  status                     AiRunStatus          @default(PENDING)
   owner                      String?
-  leaseGeneration            Int           @default(0)
+  leaseGeneration            Int                  @default(0)
   leaseExpiresAt             DateTime?
-  attempt                    Int           @default(0)
+  attempt                    Int                  @default(0)
   nextRetryAt                DateTime?
   errorCode                  String?
   tokenUsage                 Int?
-  inputTokens                Int           @default(0)
-  outputTokens               Int           @default(0)
-  toolCallCount              Int           @default(0)
-  costMicros                 Int           @default(0)
+  inputTokens                Int                  @default(0)
+  outputTokens               Int                  @default(0)
+  toolCallCount              Int                  @default(0)
+  costMicros                 Int                  @default(0)
   latencyMs                  Int?
-  responseMessageId          String?       @unique
-  createdAt                  DateTime      @default(now())
-  updatedAt                  DateTime      @updatedAt
-  room                       Room          @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  triggerMessage             Message       @relation("AiTrigger", fields: [triggerMessageId], references: [id])
-  callerMember               RoomMember    @relation("AiCaller", fields: [callerMemberId], references: [id])
-  responseMessage            Message?      @relation("AiResponse", fields: [responseMessageId], references: [id])
-  parentRun                  AiRun?        @relation("AiRunParent", fields: [parentRunId], references: [id], onDelete: SetNull)
-  childRuns                  AiRun[]       @relation("AiRunParent")
-  targetAgent                Agent?        @relation("AiRunTargetAgent", fields: [targetAgentId], references: [id], onDelete: SetNull)
-  targetMember               RoomMember?   @relation("AiRunTargetMember", fields: [targetMemberId], references: [id], onDelete: SetNull)
+  responseMessageId          String?              @unique
+  createdAt                  DateTime             @default(now())
+  updatedAt                  DateTime             @updatedAt
+  room                       Room                 @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  triggerMessage             Message              @relation("AiTrigger", fields: [triggerMessageId], references: [id])
+  callerMember               RoomMember           @relation("AiCaller", fields: [callerMemberId], references: [id])
+  responseMessage            Message?             @relation("AiResponse", fields: [responseMessageId], references: [id])
+  parentRun                  AiRun?               @relation("AiRunParent", fields: [parentRunId], references: [id], onDelete: SetNull)
+  childRuns                  AiRun[]              @relation("AiRunParent")
+  targetAgent                Agent?               @relation("AiRunTargetAgent", fields: [targetAgentId], references: [id], onDelete: SetNull)
+  targetMember               RoomMember?          @relation("AiRunTargetMember", fields: [targetMemberId], references: [id], onDelete: SetNull)
   artifacts                  Artifact[]
   outboxEvents               OutboxEvent[]
+  runtime                    AgentRuntime?        @relation(fields: [runtimeId], references: [id], onDelete: SetNull)
+  runEvents                  AgentRunEvent[]
+  runTurns                   AgentRunTurn[]
+  runCheckpoints             AgentRunCheckpoint[]
+  toolCalls                  AgentToolCall[]
+  approvals                  AgentApproval[]
 
   @@unique([triggerMessageId, mode])
   @@unique([parentRunId, targetMemberId])
@@ -312,6 +322,135 @@ model AiRun {
   @@index([targetMemberId, status])
   @@index([status, nextRetryAt, leaseExpiresAt])
   @@index([runtimeId, status, nextRetryAt, leaseExpiresAt])
+}
+
+model AgentRuntime {
+  id              String    @id
+  kind            String
+  endpoint        String?
+  capabilities    Json
+  status          String
+  version         String?
+  lastHeartbeatAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  runs            AiRun[]
+
+  @@index([status, lastHeartbeatAt])
+  @@index([kind, status])
+}
+
+model AgentRunEvent {
+  id          String               @id @default(cuid())
+  runId       String
+  sequence    Int
+  type        String
+  payload     Json
+  createdAt   DateTime             @default(now())
+  run         AiRun                @relation(fields: [runId], references: [id], onDelete: Restrict)
+  checkpoints AgentRunCheckpoint[] @relation("CheckpointEvent")
+
+  @@unique([runId, sequence])
+  @@index([runId, createdAt])
+  @@index([type, createdAt])
+}
+
+model AgentRunTurn {
+  id                  String               @id @default(cuid())
+  runId               String
+  turnIndex           Int
+  inputDigest         String
+  prefixDigest        String
+  loadedSkillIds      Json
+  loadedToolSchemaIds Json
+  providerRequestId   String?
+  status              String               @default("STARTED")
+  assistantContent    Json?
+  thinking            Json?
+  thinkingContinuity  String               @default("NONE")
+  finishReason        String?
+  usage               Json?
+  startedAt           DateTime             @default(now())
+  completedAt         DateTime?
+  run                 AiRun                @relation(fields: [runId], references: [id], onDelete: Restrict)
+  checkpoints         AgentRunCheckpoint[] @relation("CheckpointTurn")
+  toolCalls           AgentToolCall[]
+
+  @@unique([runId, turnIndex])
+  @@index([runId, status, startedAt])
+  @@index([providerRequestId])
+}
+
+model AgentRunCheckpoint {
+  id                  String        @id @default(cuid())
+  runId               String
+  turnIndex           Int
+  eventSequence       Int
+  runtimeSessionId    String?
+  taskDigest          String
+  contextGeneration   Int
+  skillBundleHash     String
+  mcpBundleDigest     String
+  loadedSkillIds      Json
+  loadedToolSchemaIds Json
+  inboundSequence     Int           @default(0)
+  cumulativeUsage     Json
+  summary             Json?
+  createdAt           DateTime      @default(now())
+  run                 AiRun         @relation(fields: [runId], references: [id], onDelete: Restrict)
+  turn                AgentRunTurn  @relation("CheckpointTurn", fields: [runId, turnIndex], references: [runId, turnIndex], onDelete: Restrict)
+  event               AgentRunEvent @relation("CheckpointEvent", fields: [runId, eventSequence], references: [runId, sequence], onDelete: Restrict)
+
+  @@unique([runId, eventSequence])
+  @@index([runId, turnIndex])
+  @@index([runtimeSessionId])
+}
+
+model AgentToolCall {
+  id               String          @id
+  runId            String
+  turnIndex        Int
+  toolId           String
+  toolVersion      String
+  arguments        Json
+  argumentsDigest  String
+  risk             String
+  concurrency      String
+  status           String          @default("PENDING")
+  idempotencyKey   String?         @unique
+  result           Json?
+  resultOrigin     String?
+  resultArtifactId String?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  run              AiRun           @relation(fields: [runId], references: [id], onDelete: Restrict)
+  turn             AgentRunTurn    @relation(fields: [runId, turnIndex], references: [runId, turnIndex], onDelete: Restrict)
+  resultArtifact   Artifact?       @relation("ToolCallResultArtifact", fields: [resultArtifactId], references: [id], onDelete: SetNull)
+  approvals        AgentApproval[]
+
+  @@unique([runId, id])
+  @@index([runId, turnIndex])
+  @@index([runId, status, createdAt])
+}
+
+model AgentApproval {
+  id              String        @id @default(cuid())
+  runId           String
+  toolCallId      String
+  argumentsDigest String
+  status          String        @default("PENDING")
+  requestedAt     DateTime      @default(now())
+  decidedAt       DateTime?
+  decidedBy       String?
+  decisionReason  String?
+  run             AiRun         @relation(fields: [runId], references: [id], onDelete: Restrict)
+  toolCall        AgentToolCall @relation(fields: [runId, toolCallId], references: [runId, id], onDelete: Restrict)
+
+  @@unique([runId, toolCallId, argumentsDigest])
+  @@index([status, requestedAt])
+  @@index([runId, status])
 }
 
 model Model {
@@ -370,7 +509,7 @@ model RoomSupervisor {
 }
 
 model Artifact {
-  id               String    @id @default(cuid())
+  id               String          @id @default(cuid())
   runId            String?
   objectKey        String
   mimeType         String
@@ -382,8 +521,9 @@ model Artifact {
   moderationStatus String?
   expiresAt        DateTime?
   deletedAt        DateTime?
-  createdAt        DateTime  @default(now())
-  run              AiRun?    @relation(fields: [runId], references: [id], onDelete: SetNull)
+  createdAt        DateTime        @default(now())
+  run              AiRun?          @relation(fields: [runId], references: [id], onDelete: SetNull)
+  toolCallResults  AgentToolCall[] @relation("ToolCallResultArtifact")
 
   @@unique([objectKey])
   @@index([runId, createdAt])
@@ -407,16 +547,45 @@ model OutboxEvent {
 }
 
 model Skill {
-  id          String       @id @default(cuid())
-  name        String       @unique
-  description String       @default("")
-  source      String       @default("URL")
+  id          String          @id @default(cuid())
+  name        String          @unique
+  description String          @default("")
+  source      String          @default("URL")
   sourceRef   String?
   manifest    Json?
-  enabled     Boolean      @default(true)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  enabled     Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
   agents      AgentSkill[]
+  revisions   SkillRevision[]
+}
+
+model SkillRevision {
+  id         String   @id @default(cuid())
+  skillId    String
+  version    Int
+  bundleHash String   @unique
+  manifest   Json
+  content    Json
+  createdAt  DateTime @default(now())
+  skill      Skill    @relation(fields: [skillId], references: [id], onDelete: Restrict)
+
+  @@unique([skillId, version])
+  @@index([skillId, createdAt])
+}
+
+model McpConfigRevision {
+  id            String   @id @default(cuid())
+  configId      String
+  revision      Int
+  config        Json
+  approvedTools Json
+  schemaDigest  String
+  createdAt     DateTime @default(now())
+
+  @@unique([configId, revision])
+  @@index([configId, createdAt])
+  @@index([schemaDigest])
 }
 
 model AgentSkill {

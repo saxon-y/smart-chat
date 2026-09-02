@@ -23,6 +23,24 @@ services:
       - .:/app
       - smart-chat-artifacts:/app/.data
 
+  runtime-worker:
+    profiles: [self-hosted-runtime]
+    image: node:22-bookworm-slim
+    working_dir: /app
+    command: ["npm", "run", "runtime:worker"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://smart_chat:smart_chat@postgres:5432/smart_chat?schema=public
+    depends_on:
+      postgres:
+        condition: service_started
+    ports:
+      - "3011:3011"
+    stop_grace_period: 2m
+    volumes:
+      - .:/app
+      - smart-chat-artifacts:/app/.data
+
 volumes:
   smart-chat-postgres:
   smart-chat-artifacts:

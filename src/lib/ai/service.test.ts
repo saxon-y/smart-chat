@@ -5,6 +5,7 @@ const db = {
   $executeRaw: vi.fn(),
   $transaction: vi.fn(),
   aiRun: { count: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+  agentRunEvent: { findFirst: vi.fn(), create: vi.fn() },
   artifact: { upsert: vi.fn() },
   message: { create: vi.fn(), findMany: vi.fn() },
   outboxEvent: { create: vi.fn() },
@@ -75,12 +76,15 @@ describe("AI run service", () => {
     vi.clearAllMocks();
     db.$transaction.mockImplementation(async (callback: (tx: typeof db) => unknown) => callback(db));
     db.$executeRaw.mockResolvedValue(0);
+    db.agentRunEvent.findFirst.mockResolvedValue(null);
+    db.agentRunEvent.create.mockResolvedValue({});
   });
 
   it("claims and completes a direct text run exactly once", async () => {
     const run = directRun();
     arrangeClaim(run);
     db.aiRun.findUnique.mockResolvedValueOnce({ ...run, status: AiRunStatus.SUCCEEDED });
+    db.aiRun.findUnique.mockResolvedValueOnce({ responseMessage: null });
     db.message.findMany.mockResolvedValue([{ body: "hello", kind: MessageKind.TEXT, senderMember: { principalType: PrincipalType.USER } }]);
     callChatProvider.mockResolvedValue({ content: "answer", tokenUsage: 23 });
     db.roomMember.findFirst.mockResolvedValue(run.targetMember);

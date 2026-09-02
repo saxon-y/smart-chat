@@ -1,4 +1,4 @@
-import { AgentKind, AiRunMode, AiRunStatus, MessageKind, ModelProviderType, Prisma, PrincipalType } from "@prisma/client";
+import { AgentKind, AiRunMode, AiRunStatus, ModelProviderType, Prisma, PrincipalType } from "@prisma/client";
 import { db } from "@/lib/db";
 import { buildChatContext } from "@/lib/ai/context";
 import { buildSupervisorPrompt, validateRoutingDecision, type RoutingCandidate } from "@/lib/ai/routing";
@@ -7,11 +7,13 @@ import { callChatProvider, generateImage, type ProviderConfig } from "@/lib/ai/p
 import { moderateImagePrompt } from "@/lib/ai/moderation";
 import { createArtifactStorage } from "@/lib/ai/artifact-storage";
 import { publishAgentEvent, publishMessage } from "@/lib/chat/events";
+import { claimAiRun } from "@/lib/harness/orchestration/claim";
+import { cancelRun, retryRun } from "@/lib/harness/orchestration/cancellation";
+import { recordRunFailure } from "@/lib/harness/orchestration/completion";
+import { recoverRuns } from "@/lib/harness/orchestration/recovery";
+import { projectFinalMessage } from "@/lib/harness/orchestration/result-projector";
 
 const DEFAULT_SYSTEM_PROMPT = "你是聊天室助手。用简体中文简洁、清楚地回复，只根据当前房间上下文作答。";
-const LEASE_MS = 10 * 60 * 1000;
-const MAX_ACTIVE_PER_ROOM = 2;
-const MAX_ACTIVE_PER_AGENT = 1;
 
 type ModelConfig = {
   baseUrl: string;
@@ -55,18 +57,8 @@ async function recentContext(roomId: string) {
 
 async function completeTextRun(run: Awaited<ReturnType<typeof loadRun>>, content: string, tokenUsage?: number) {
   if (!run?.targetMemberId || !run.owner) throw new Error("assistant_member_not_found");
-  const response = await db.$transaction(async (tx) => {
-    const target = await tx.roomMember.findFirst({ where: { id: run.targetMemberId!, roomId: run.roomId, leftAt: null } });
-    if (!target || target.version !== run.membershipVersion) throw new Error("assistant_membership_changed");
-    const claimed = await tx.aiRun.updateMany({ where: { id: run.id, owner: run.owner!, leaseGeneration: run.leaseGeneration, status: AiRunStatus.RUNNING, leaseExpiresAt: { gt: new Date() } }, data: { status: AiRunStatus.SUCCEEDED, tokenUsage, latencyMs: Date.now() - run.updatedAt.getTime(), leaseExpiresAt: null } });
-    if (claimed.count !== 1) throw new Error("run_lease_lost");
-    const room = await tx.room.update({ where: { id: run.roomId }, data: { lastSequence: { increment: 1 } }, select: { lastSequence: true } });
-    const message = await tx.message.create({ data: { roomId: run.roomId, senderMemberId: target.id, kind: MessageKind.AI, body: content, roomSequence: room.lastSequence, replyToId: run.triggerMessageId } });
-    await tx.aiRun.update({ where: { id: run.id }, data: { responseMessageId: message.id } });
-    await tx.outboxEvent.create({ data: { roomId: run.roomId, runId: run.id, messageId: message.id, type: "agent_done", payload: { ok: true, status: "succeeded" } } });
-    return message;
-  });
-  publishMessage(run.roomId, response.id);
+  const projection = await projectFinalMessage({ runId: run.id, roomId: run.roomId, targetMemberId: run.targetMemberId, membershipVersion: run.membershipVersion, owner: run.owner, leaseGeneration: run.leaseGeneration, triggerMessageId: run.triggerMessageId, updatedAt: run.updatedAt, body: content, tokenUsage });
+  if (projection.created) publishMessage(run.roomId, projection.message.id);
 }
 
 async function completeImageRun(run: Awaited<ReturnType<typeof loadRun>>, bytes: Buffer, revisedPrompt?: string) {
@@ -74,57 +66,25 @@ async function completeImageRun(run: Awaited<ReturnType<typeof loadRun>>, bytes:
   const stored = await storeGeneratedImage(bytes);
   let response;
   try {
-    response = await db.$transaction(async (tx) => {
-    const target = await tx.roomMember.findFirst({ where: { id: run.targetMemberId!, roomId: run.roomId, leftAt: null } });
-    if (!target || target.version !== run.membershipVersion) throw new Error("assistant_membership_changed");
-    const claimed = await tx.aiRun.updateMany({ where: { id: run.id, owner: run.owner!, leaseGeneration: run.leaseGeneration, status: AiRunStatus.RUNNING, leaseExpiresAt: { gt: new Date() } }, data: { status: AiRunStatus.SUCCEEDED, latencyMs: Date.now() - run.updatedAt.getTime(), leaseExpiresAt: null } });
-    if (claimed.count !== 1) throw new Error("run_lease_lost");
-    const artifact = await tx.artifact.upsert({
+    const artifact = await db.artifact.upsert({
       where: { objectKey: stored.objectKey },
       update: { runId: run.id },
       create: { runId: run.id, objectKey: stored.objectKey, mimeType: stored.mimeType, byteSize: bytes.length, sha256: stored.sha256, moderationStatus: "PROVIDER_APPROVED", expiresAt: new Date(Date.now() + Math.max(1, Number(process.env.ARTIFACT_RETENTION_DAYS ?? 30)) * 86_400_000), providerMetadata: revisedPrompt ? { revisedPrompt } : undefined },
     });
-    const room = await tx.room.update({ where: { id: run.roomId }, data: { lastSequence: { increment: 1 } }, select: { lastSequence: true } });
     const contentParts = [{ type: "image", artifactId: artifact.id, url: `/api/artifacts/${artifact.id}`, alt: revisedPrompt ?? "生成图片" }] as Prisma.InputJsonValue;
-    const message = await tx.message.create({ data: { roomId: run.roomId, senderMemberId: target.id, kind: MessageKind.AI, body: revisedPrompt ? `已根据提示生成：${revisedPrompt}` : "图片已生成", contentParts, roomSequence: room.lastSequence, replyToId: run.triggerMessageId } });
-    await tx.aiRun.update({ where: { id: run.id }, data: { responseMessageId: message.id } });
-    await tx.outboxEvent.create({ data: { roomId: run.roomId, runId: run.id, messageId: message.id, type: "agent_done", payload: { ok: true, status: "succeeded", artifactId: artifact.id } } });
-    return message;
-    });
+    const projection = await projectFinalMessage({ runId: run.id, roomId: run.roomId, targetMemberId: run.targetMemberId, membershipVersion: run.membershipVersion, owner: run.owner, leaseGeneration: run.leaseGeneration, triggerMessageId: run.triggerMessageId, updatedAt: run.updatedAt, body: revisedPrompt ? `已根据提示生成：${revisedPrompt}` : "图片已生成", contentParts, artifactId: artifact.id });
+    response = projection.message;
+    if (projection.created) publishMessage(run.roomId, response.id);
   } catch (error) {
     await createArtifactStorage().delete(stored.objectKey).catch(() => undefined);
     throw error;
   }
-  publishMessage(run.roomId, response.id);
 }
 
 function loadRun(runId: string) {
   return db.aiRun.findUnique({
     where: { id: runId },
     include: { triggerMessage: true, callerMember: true, targetAgent: { include: { model: true } }, targetMember: true, room: { include: { supervisor: { include: { agent: { include: { model: true } } } } } } },
-  });
-}
-
-async function claimRun(runId: string, owner: string) {
-  const now = new Date();
-  return db.$transaction(async (tx) => {
-    const candidate = await tx.aiRun.findUnique({ where: { id: runId }, select: { roomId: true, mode: true, targetAgentId: true, runtimeKind: true } });
-    if (!candidate) return false;
-    if (candidate.runtimeKind && candidate.runtimeKind !== "legacy") return false;
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${candidate.roomId}))`;
-    const activeStatuses: AiRunStatus[] = [AiRunStatus.CLAIMED, AiRunStatus.RUNNING];
-    const activeRoom = await tx.aiRun.count({ where: { roomId: candidate.roomId, status: { in: activeStatuses } } });
-    if (candidate.mode !== AiRunMode.SUPERVISOR && activeRoom >= MAX_ACTIVE_PER_ROOM) return false;
-    if (candidate.targetAgentId) {
-      const activeAgent = await tx.aiRun.count({ where: { targetAgentId: candidate.targetAgentId, status: { in: activeStatuses } } });
-      if (activeAgent >= MAX_ACTIVE_PER_AGENT) return false;
-    }
-    if (candidate.mode === AiRunMode.SUPERVISOR) {
-      const roomHead = await tx.aiRun.findFirst({ where: { roomId: candidate.roomId, mode: AiRunMode.SUPERVISOR, status: { in: [AiRunStatus.PENDING, AiRunStatus.CLAIMED, AiRunStatus.RUNNING, AiRunStatus.FAILED_RETRYABLE] } }, orderBy: { triggerMessage: { roomSequence: "asc" } }, select: { id: true } });
-      if (roomHead?.id !== runId) return false;
-    }
-    const result = await tx.aiRun.updateMany({ where: { id: runId, OR: [{ status: AiRunStatus.PENDING }, { status: AiRunStatus.FAILED_RETRYABLE, nextRetryAt: { lte: now } }, { status: { in: [AiRunStatus.CLAIMED, AiRunStatus.RUNNING] }, leaseExpiresAt: { lt: now } }] }, data: { status: AiRunStatus.CLAIMED, owner, leaseGeneration: { increment: 1 }, leaseExpiresAt: new Date(now.getTime() + LEASE_MS), attempt: { increment: 1 } } });
-    return result.count === 1;
   });
 }
 
@@ -200,13 +160,9 @@ async function runAgent(run: NonNullable<Awaited<ReturnType<typeof loadRun>>>) {
   }
 }
 
-function retryable(errorCode: string) {
-  return errorCode === "provider_request_failed" || errorCode.startsWith("provider_http_5") || errorCode === "provider_http_429";
-}
-
 export async function processAiRun(runId: string) {
   const owner = `${process.pid}:${crypto.randomUUID()}`;
-  if (!await claimRun(runId, owner)) return;
+  if (!await claimAiRun(runId, owner)) return;
   let run = await loadRun(runId);
   if (!run) throw new Error("ai_run_not_found");
   const started = await db.aiRun.updateMany({ where: { id: run.id, owner, status: AiRunStatus.CLAIMED }, data: { status: AiRunStatus.RUNNING } });
@@ -224,14 +180,7 @@ export async function processAiRun(runId: string) {
   } catch (error) {
     const raw = error instanceof Error ? error.message : "provider_request_failed";
     const errorCode = /^[a-z0-9_]+$/.test(raw) ? raw : "provider_request_failed";
-    const cancelled = errorCode === "assistant_membership_changed" || errorCode === "agent_not_available" || errorCode === "caller_membership_revoked";
-    const nextStatus = cancelled ? AiRunStatus.CANCELLED : retryable(errorCode) && run.attempt < 3 ? AiRunStatus.FAILED_RETRYABLE : AiRunStatus.FAILED_FINAL;
-    const changed = await db.$transaction(async (tx) => {
-      const changed = await tx.aiRun.updateMany({ where: { id: run.id, owner: run.owner, leaseGeneration: run.leaseGeneration, status: { in: [AiRunStatus.CLAIMED, AiRunStatus.RUNNING] } }, data: { status: nextStatus, errorCode, nextRetryAt: nextStatus === AiRunStatus.FAILED_RETRYABLE ? new Date(Date.now() + 2000 * 2 ** run.attempt) : null, leaseExpiresAt: null } });
-      if (changed.count === 1 && nextStatus !== AiRunStatus.FAILED_RETRYABLE) await tx.outboxEvent.create({ data: { roomId: run.roomId, runId: run.id, type: "agent_done", payload: { ok: false, status: nextStatus.toLowerCase(), error: errorCode } } });
-      return changed;
-    }).catch(() => undefined);
-    if (!changed || changed.count !== 1) throw new Error("run_lease_lost");
+    const nextStatus = await recordRunFailure({ runId: run.id, roomId: run.roomId, owner: run.owner, leaseGeneration: run.leaseGeneration, attempt: run.attempt, errorCode });
     const agent = run.targetAgent ?? run.room.supervisor?.agent;
     publishAgentEvent({ type: "agent_done", roomId: run.roomId, runId: run.id, agentKey: agent?.key ?? "unknown", agentName: agent?.name ?? "AI 助手", mode: run.mode, status: nextStatus.toLowerCase(), ok: false, error: errorCode });
     throw new Error(errorCode);
@@ -239,15 +188,7 @@ export async function processAiRun(runId: string) {
 }
 
 export async function recoverPendingAiRuns(limit = 20) {
-  const now = new Date();
-  const runs = await db.aiRun.findMany({
-    where: { OR: [{ status: AiRunStatus.PENDING }, { status: AiRunStatus.FAILED_RETRYABLE, nextRetryAt: { lte: now } }, { status: { in: [AiRunStatus.CLAIMED, AiRunStatus.RUNNING] }, leaseExpiresAt: { lt: now } }] },
-    orderBy: [{ roomId: "asc" }, { createdAt: "asc" }],
-    take: limit,
-    select: { id: true },
-  });
-  await Promise.allSettled(runs.map((run) => processAiRun(run.id)));
-  return runs.length;
+  return recoverRuns(processAiRun, limit);
 }
 
 export async function listRoomAiRuns(roomId: string, limit = 50, cursor?: string) {
@@ -265,26 +206,9 @@ export async function listRoomAiRuns(roomId: string, limit = 50, cursor?: string
 }
 
 export async function cancelAiRun(roomId: string, runId: string) {
-  return db.$transaction(async (tx) => {
-    const run = await tx.aiRun.findFirst({ where: { id: runId, roomId }, select: { id: true, status: true, targetAgentId: true } });
-    if (!run) return null;
-    const cancellable: AiRunStatus[] = [AiRunStatus.PENDING, AiRunStatus.CLAIMED, AiRunStatus.RUNNING, AiRunStatus.FAILED_RETRYABLE, AiRunStatus.FAILED_FINAL];
-    if (!cancellable.includes(run.status)) return run;
-    const updated = await tx.aiRun.updateMany({ where: { id: runId, roomId, status: run.status }, data: { status: AiRunStatus.CANCELLED, owner: null, leaseExpiresAt: null, nextRetryAt: null, errorCode: "cancelled_by_user" } });
-    if (updated.count !== 1) return null;
-    await tx.outboxEvent.create({ data: { roomId, runId, type: "agent_done", payload: { ok: false, status: "cancelled", error: "cancelled_by_user" } } });
-    return { ...run, status: AiRunStatus.CANCELLED };
-  });
+  return cancelRun(roomId, runId);
 }
 
 export async function retryAiRun(roomId: string, runId: string) {
-  return db.$transaction(async (tx) => {
-    const run = await tx.aiRun.findFirst({ where: { id: runId, roomId }, select: { id: true, status: true, callerMember: { select: { leftAt: true, roomId: true } } } });
-    if (!run) return null;
-    if (run.callerMember.leftAt || run.callerMember.roomId !== roomId) throw new Error("caller_membership_revoked");
-    const retryableStatuses: AiRunStatus[] = [AiRunStatus.FAILED_RETRYABLE, AiRunStatus.FAILED_FINAL, AiRunStatus.CANCELLED];
-    if (!retryableStatuses.includes(run.status)) return run;
-    const updated = await tx.aiRun.updateMany({ where: { id: runId, roomId, status: run.status }, data: { status: AiRunStatus.PENDING, owner: null, leaseExpiresAt: null, nextRetryAt: null, errorCode: null } });
-    return updated.count === 1 ? { ...run, status: AiRunStatus.PENDING } : null;
-  });
+  return retryRun(roomId, runId);
 }
