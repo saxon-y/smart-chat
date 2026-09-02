@@ -2,8 +2,8 @@
 
 日期：2026-09-01  
 状态：对照自建 Runtime 方案、Harness 协议与现网执行路径修订  
-配套：[产品功能](PRODUCT_FEATURES.md) · [技术架构](TECHNICAL_ARCHITECTURE.md)  
-依据：`docs/SELF_HOSTED_AGENT_RUNTIME_DESIGN.md`、`docs/AGENT_HARNESS_DESIGN.md`、`docs/adr/ADR-001-agent-runtime-boundary.md`、`src/lib/harness/`、`src/lib/ai/`
+配套：[产品功能](../产品/产品功能.md) · [技术架构](技术架构.md)  
+依据：`docs/架构/自建智能体运行时设计.md`、`docs/架构/智能体工具框架设计.md`、`docs/架构/adr/ADR-001-智能体运行时边界.md`、`src/lib/harness/`、`src/lib/ai/`
 
 Smart Chat 的 Harness 跨两个平面：控制面负责任务契约与治理；Runtime 负责单次 Run 内的 ReAct、策略执行、验证钩子和恢复。二者共用同一套 Task / Event / Result 协议。
 
@@ -360,8 +360,8 @@ Planner 在父任务上限内给每个子 Run 分配预算，不得让所有孩�
 
 ## 13. 相关文档
 
-- 产品怎么用：[产品功能](PRODUCT_FEATURES.md)
-- 系统怎么部署：[技术架构](TECHNICAL_ARCHITECTURE.md)
-- 设计原文：[Harness](AGENT_HARNESS_DESIGN.md) · [自建 Runtime](SELF_HOSTED_AGENT_RUNTIME_DESIGN.md)
-- 决策：[ADR-001](adr/ADR-001-agent-runtime-boundary.md)
-- 落地任务：[AGENT_HARNESS_RUNTIME_TASKS](AGENT_HARNESS_RUNTIME_TASKS.md)
+- 产品怎么用：[产品功能](../产品/产品功能.md)
+- 系统怎么部署：[技术架构](技术架构.md)
+- 设计原文：[Harness](智能体工具框架设计.md) · [自建 Runtime](自建智能体运行时设计.md)
+- 决策：[ADR-001](adr/ADR-001-智能体运行时边界.md)
+- 落地任务：[AGENT_HARNESS_RUNTIME_TASKS](../运行时/智能体运行时任务.md)

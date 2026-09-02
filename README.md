@@ -82,13 +82,13 @@ npm audit
 
 总览（含出图）：
 
-- [产品功能](docs/PRODUCT_FEATURES.md)
-- [技术架构](docs/TECHNICAL_ARCHITECTURE.md)
-- [AI 运行时架构](docs/AI_RUNTIME_ARCHITECTURE.md)
-- [文档地图](docs/PROJECT_OVERVIEW.md)
+- [产品功能](docs/产品/产品功能.md)
+- [技术架构](docs/架构/技术架构.md)
+- [AI 运行时架构](docs/架构/AI运行时架构.md)
+- [文档地图](docs/项目概览.md)
 
 设计与实施原文：
 
-- [PRD](docs/PRD.md)
-- [技术与实施方案](docs/IMPLEMENTATION_PLAN.md)
-- [测试规格](docs/TEST_SPEC.md)
+- [PRD](docs/产品/产品需求.md)
+- [技术与实施方案](docs/架构/实施方案.md)
+- [测试规格](docs/运行时/测试规格.md)
