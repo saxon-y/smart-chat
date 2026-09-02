@@ -8,7 +8,7 @@ BACKUP_FILE ?= $(BACKUP_DIR)/smart-chat-$$(date +%Y%m%d-%H%M%S).sql
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check config build db-up migrate deploy deploy-web runtime-up status logs logs-web logs-worker restart stop backup update verify
+.PHONY: help check config build db-up migrate deploy deploy-web redeploy runtime-up status logs logs-web logs-worker restart stop backup update verify
 
 help:
 	@printf '%s\n' \
@@ -16,6 +16,7 @@ help:
 	  '' \
 	  '  make deploy       Build, migrate, and start web + legacy worker' \
 	  '  make deploy-web   Build, migrate, and start web only' \
+	  '  make redeploy     Safely pull, back up, rebuild, migrate, and verify' \
 	  '  make runtime-up   Start optional self-hosted runtime worker' \
 	  '  make update       Pull latest code and redeploy web + worker' \
 	  '  make status       Show container status' \
@@ -55,6 +56,9 @@ deploy-web: migrate
 	$(COMPOSE) up -d postgres web
 	@$(MAKE) --no-print-directory status
 
+redeploy:
+	./scripts/redeploy.sh
+
 runtime-up: config
 	@test -n "$${SELF_HOSTED_RUNTIME_EXECUTOR:-}" || grep -Eq '^SELF_HOSTED_RUNTIME_EXECUTOR=.+$$' .env || { echo 'ERROR: SELF_HOSTED_RUNTIME_EXECUTOR is not configured'; exit 1; }
 	$(RUNTIME_COMPOSE) up -d runtime-worker
@@ -82,8 +86,7 @@ backup: db-up
 	@file="$(BACKUP_FILE)"; $(COMPOSE) exec -T postgres pg_dump -U smart_chat -d smart_chat > "$$file"; echo "Backup written to $$file"
 
 update: check
-	git pull --ff-only
-	@$(MAKE) --no-print-directory deploy
+	./scripts/redeploy.sh
 
 verify: config
 	@$(WORKER_COMPOSE) ps

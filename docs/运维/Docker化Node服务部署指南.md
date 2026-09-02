@@ -86,6 +86,23 @@ docker compose config
 make deploy
 ```
 
+已经上线后的自动重新部署使用：
+
+```bash
+make redeploy
+```
+
+该命令调用 `scripts/redeploy.sh`，依次执行：部署锁、环境检查、脏工作区保护、`git pull --ff-only`、数据库备份、镜像构建、Prisma migration、Web/Worker 容器重建和本地 HTTP 健康检查。任何步骤失败都会以非零状态退出并输出对应阶段；构建和 migration 完成前不会替换当前 Web 容器。
+
+可选参数：
+
+```bash
+AUTO_PULL=0 make redeploy          # 已手工拉取代码，不再次 git pull
+SKIP_BACKUP=1 make redeploy        # 跳过备份，不建议生产使用
+HEALTH_ATTEMPTS=60 make redeploy   # 最多等待 120 秒
+DEPLOY_ALLOW_DIRTY=1 make redeploy # 允许有本地修改，谨慎使用
+```
+
 常用命令：
 
 ```bash
