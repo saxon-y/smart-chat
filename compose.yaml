@@ -5,40 +5,77 @@ services:
     environment:
       POSTGRES_DB: smart_chat
       POSTGRES_USER: smart_chat
-      POSTGRES_PASSWORD: smart_chat
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-smart_chat}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - smart-chat-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smart_chat -d smart_chat"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: smart-chat:${SMART_CHAT_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://smart_chat:${POSTGRES_PASSWORD:-smart_chat}@postgres:5432/smart_chat?schema=public
+      ARTIFACT_STORAGE_DIR: /app/.data
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    volumes:
+      - smart-chat-artifacts:/app/.data
 
   worker:
     profiles: [worker]
-    image: node:22-bookworm-slim
+    image: smart-chat:${SMART_CHAT_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
     working_dir: /app
     command: ["npm", "run", "worker"]
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql://smart_chat:${POSTGRES_PASSWORD:-smart_chat}@postgres:5432/smart_chat?schema=public
+      AGENT_WORKER_URL: http://web:3000/api/internal/agent-worker
+      ARTIFACT_STORAGE_DIR: /app/.data
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+      web:
+        condition: service_started
     volumes:
-      - .:/app
       - smart-chat-artifacts:/app/.data
 
   runtime-worker:
     profiles: [self-hosted-runtime]
-    image: node:22-bookworm-slim
+    image: smart-chat:${SMART_CHAT_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
     working_dir: /app
     command: ["npm", "run", "runtime:worker"]
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://smart_chat:smart_chat@postgres:5432/smart_chat?schema=public
+      DATABASE_URL: postgresql://smart_chat:${POSTGRES_PASSWORD:-smart_chat}@postgres:5432/smart_chat?schema=public
+      ARTIFACT_STORAGE_DIR: /app/.data
     depends_on:
       postgres:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "3011:3011"
     stop_grace_period: 2m
     volumes:
-      - .:/app
       - smart-chat-artifacts:/app/.data
 
 volumes:

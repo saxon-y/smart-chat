@@ -1,0 +1,15 @@
+.git
+.next
+.omx
+.data
+.env
+.env.*
+!.env.example
+node_modules
+npm-debug.log*
+coverage
+certificates
+.cert
+docs
+chat-history.md
+tsconfig.tsbuildinfo
