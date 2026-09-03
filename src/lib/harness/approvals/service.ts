@@ -1,5 +1,6 @@
 import { AiRunStatus, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { createNotification } from "@/lib/notifications";
 
 export type ApprovalDecision = "APPROVED" | "REJECTED";
 
@@ -39,6 +40,10 @@ export async function decideAgentApproval(input: {
       });
     }
     const decided = await tx.agentApproval.findUniqueOrThrow({ where: { id: approval.id } });
+    const run = await tx.aiRun.findUnique({ where: { id: input.runId }, select: { callerMember: { select: { userId: true } } } });
+    if (run?.callerMember.userId && run.callerMember.userId !== input.userId) {
+      await createNotification({ userId: run.callerMember.userId, roomId: input.roomId, type: "APPROVAL", title: input.decision === "APPROVED" ? "审批已通过" : "审批已拒绝", summary: input.reason?.trim() || "审批状态已更新。", sourceId: approval.id, sourceType: "approval", dedupeKey: `approval:${approval.id}:${input.decision}` }, tx);
+    }
     return { kind: "DECIDED" as const, approval: decided };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }

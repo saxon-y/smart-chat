@@ -1,9 +1,7 @@
 "use client";
 
 import {
-  AlertCircle,
   Bell,
-  Ban,
   Bot,
   EllipsisVertical,
   Hash,
@@ -22,6 +20,8 @@ import {
   VolumeOff,
   X,
   Trash2,
+  Copy,
+  MessageSquareReply,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
@@ -29,6 +29,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { mergeMessage } from "@/lib/chat/message-list";
+import AgentRunTimeline from "./AgentRunTimeline";
+import ThreadPanel from "./ThreadPanel";
+import SearchPanel from "./SearchPanel";
+import NotificationPanel from "./NotificationPanel";
+import { useRoomPresence } from "@/lib/chat/use-room-presence";
 import { WECHAT_EMOJI, getWechatEmoji } from "@/lib/wechat-emoji";
 import {
   api,
@@ -77,6 +82,7 @@ const demoMembers: Member[] = [
   },
 ];
 const demoMessages: Message[] = [];
+const REACTION_EMOJIS = ["👍", "❤️", "😂", "🎉", "😮", "😢", "😡"] as const;
 
 function Avatar({
   name,
@@ -181,6 +187,12 @@ export default function ChatWorkspace() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const mentionMenuRef = useRef<HTMLDivElement>(null);
   const thinkingTimerRef = useRef<number | null>(null);
+  const pendingMessagesRef = useRef<Record<string, { body: string; attachments: Attachment[]; mentions: Array<{ memberId: string; start: number; end: number }>; replyToId?: string }>>({});
+  const [messageMenu, setMessageMenu] = useState<string | null>(null);
+  const [replyingTo, setReplyingTo] = useState<Message | null>(null);
+  const [threadRoot, setThreadRoot] = useState<Message | null>(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const updateRunStatus = useCallback((run: { runId?: string; id?: string; agentKey?: string; agentName?: string; mode?: string; status?: string; progress?: number; error?: string }) => {
     const runId = run.runId ?? run.id;
@@ -247,6 +259,7 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
   const [memberMenu, setMemberMenu] = useState<string | null>(null);
   const [supervisor, setSupervisor] = useState<SupervisorConfig | null>(null);
   const [supervisorSaving, setSupervisorSaving] = useState(false);
+  const { typing: typingMembers, announceTyping, announcePresence } = useRoomPresence(activeRoom?.id);
 
   function insertAtCursor(text: string) {
     const el = textareaRef.current;
@@ -321,6 +334,9 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
             .catch(() => setActiveRoom(next[0]));
         }
       })
+      .catch(() => undefined);
+    api<{ rooms: Array<{ roomId: string; unread: number }> }>("/api/rooms/unread")
+      .then((result) => setUnreadByRoom(Object.fromEntries(result.rooms.filter((room) => room.unread > 0).map((room) => [room.roomId, room.unread]))))
       .catch(() => undefined);
   }, []);
   useEffect(() => {
@@ -419,6 +435,15 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [messages, thinking]);
+
+  useEffect(() => {
+    if (document.hidden || !activeRoom?.id) return;
+    const lastSequence = messages.at(-1)?.roomSequence;
+    if (!lastSequence) return;
+    void api(`/api/rooms/${activeRoom.id}/unread`, { method: "PATCH", body: JSON.stringify({ lastSequence }) })
+      .then(() => markRoomRead(activeRoom.id))
+      .catch(() => undefined);
+  }, [activeRoom.id, messages, markRoomRead]);
 
   const filteredRooms = useMemo(
     () =>
@@ -577,13 +602,23 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
 
   function onDraftChange(value: string) {
     setDraft(value);
+    if (value.trim()) announceTyping();
     setMentionOpen(/@[^\s]*$/.test(value));
     setMentionIndex(0);
   }
+  useEffect(() => {
+    const update = () => announcePresence(!document.hidden);
+    update();
+    document.addEventListener("visibilitychange", update);
+    return () => { document.removeEventListener("visibilitychange", update); announcePresence(false); };
+  }, [announcePresence]);
   function switchRoom(room: Room) {
     setAddAgentOpen(false);
     setAgentListMessage("");
     setRunStatuses({});
+    setReplyingTo(null);
+    setThreadRoot(null);
+    setSearchOpen(false);
     setActiveRoom(room);
   }
   function chooseMention(member: Member) {
@@ -593,6 +628,43 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
     setMentionOpen(false);
     textareaRef.current?.focus();
   }
+  async function sendMessage(clientId: string, optimistic: Message, payload: { body: string; attachments: Attachment[]; mentions: Array<{ memberId: string; start: number; end: number }>; replyToId?: string }) {
+    setMessages((current) => mergeMessage(current, { ...optimistic, status: "sending" }));
+    try {
+      const response = await api<{
+        message?: Message;
+        aiRunId?: string | null;
+        agentRun?: AgentRun;
+        aiRateLimited?: boolean;
+        duplicate?: boolean;
+      }>(`/api/rooms/${activeRoom.id}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ body: payload.body, clientId, replyToId: payload.replyToId, attachments: payload.attachments.map((a) => ({ type: "image", dataUrl: a.dataUrl, name: a.name })), mentions: payload.mentions }),
+      });
+      delete pendingMessagesRef.current[clientId];
+      if (response.message) upsertMessage(response.message);
+      if (response.aiRateLimited) setNotice("消息已发送，本次 Agent 调用因额度限制被跳过。");
+      const run = response.agentRun ?? (response.aiRunId ? { id: response.aiRunId } : undefined);
+      if (run?.id) {
+        updateRunStatus({ runId: run.id, agentKey: run.agentKey, agentName: run.agentName, mode: run.mode, status: run.status ?? "queued" });
+        const mentionedAgent = members.find((member) => member.principalType === "ASSISTANT" && payload.body.includes(`@${member.displayName}`));
+        setThinking(true); setThinkingAgent(mentionedAgent?.displayName ?? "AI 助手");
+        if (thinkingTimerRef.current) window.clearTimeout(thinkingTimerRef.current);
+        thinkingTimerRef.current = window.setTimeout(() => setThinking(false), 90000);
+      }
+    } catch {
+      setMessages((current) => mergeMessage(current, { ...optimistic, status: "failed" }));
+      setNotice("消息发送失败，可点击重试。 ");
+    }
+  }
+
+  async function retryMessage(message: Message) {
+    if (!message.clientId) return;
+    const payload = pendingMessagesRef.current[message.clientId];
+    if (!payload) return;
+    await sendMessage(message.clientId, message, payload);
+  }
+
   async function submitMessage() {
     requestNotifyPermission();
     const body = draft.trim();
@@ -607,49 +679,49 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
       body,
       createdAt: new Date().toISOString(),
       status: "sending",
+      contentParts: attachments.map((attachment) => ({ type: "image", dataUrl: attachment.dataUrl, name: attachment.name })),
+      replyTo: replyingTo ? { id: replyingTo.id, roomId: activeRoom.id, senderMemberId: replyingTo.senderMemberId, senderName: replyingTo.senderName, body: replyingTo.body, kind: replyingTo.kind, createdAt: replyingTo.createdAt } : undefined,
     };
+    const mentions = members
+      .filter((member) => body.includes(`@${member.displayName}`))
+      .map((member) => { const start = body.indexOf(`@${member.displayName}`); return { memberId: member.id, start, end: start + member.displayName.length + 1 }; });
+    const payload = { body, attachments: [...attachments], mentions, replyToId: replyingTo?.id };
+    pendingMessagesRef.current[clientId] = payload;
     setMessages((current) => [...current, optimistic]);
     setDraft("");
     setMentionOpen(false);
+    setReplyingTo(null);
+    setAttachments([]);
+    await sendMessage(clientId, optimistic, payload);
+  }
+
+  function jumpToMessage(messageId: string) {
+    document.getElementById(`message-${messageId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightedMessageId(messageId);
+    window.setTimeout(() => setHighlightedMessageId((current) => current === messageId ? null : current), 1600);
+  }
+
+  async function editExistingMessage(message: Message) {
+    const body = window.prompt("编辑消息", message.body);
+    if (body === null || body.trim() === message.body) return;
     try {
-      const response = await api<{
-        message?: Message;
-        aiRunId?: string | null;
-        agentRun?: AgentRun;
-        aiRateLimited?: boolean;
-        duplicate?: boolean;
-      }>(`/api/rooms/${activeRoom.id}/messages`, {
-        method: "POST",
-        body: JSON.stringify({
-          body,
-          clientId,
-          attachments: attachments.map((a) => ({ type: "image", dataUrl: a.dataUrl, name: a.name })),
-          mentions: members
-            .filter((member) => body.includes(`@${member.displayName}`))
-            .map((member) => {
-              const start = body.indexOf(`@${member.displayName}`);
-              return { memberId: member.id, start, end: start + member.displayName.length + 1 };
-            }),
-        }),
-      });
-      setAttachments([]);
-      if (response.message) upsertMessage(response.message);
-      if (response.aiRateLimited) setNotice("消息已发送，本次 Agent 调用因额度限制被跳过。");
-      const run = response.agentRun ?? (response.aiRunId ? { id: response.aiRunId } : undefined);
-      if (run?.id) {
-        updateRunStatus({ runId: run.id, agentKey: run.agentKey, agentName: run.agentName, mode: run.mode, status: run.status ?? "queued" });
-        const mentionedAgent = members.find((member) => member.principalType === "ASSISTANT" && body.includes(`@${member.displayName}`));
-        setThinking(true);
-        setThinkingAgent(mentionedAgent?.displayName ?? "AI 助手");
-        if (thinkingTimerRef.current) window.clearTimeout(thinkingTimerRef.current);
-        thinkingTimerRef.current = window.setTimeout(
-          () => setThinking(false),
-          90000,
-        );
-      }
-    } catch {
-      setNotice("消息已保存在本地。重新连接后即可发送。");
-    }
+      const response = await api<{ message: Message }>(`/api/rooms/${activeRoom.id}/messages/${message.id}`, { method: "PATCH", body: JSON.stringify({ body }) });
+      upsertMessage(response.message);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "无法编辑消息"); }
+  }
+
+  async function deleteExistingMessage(message: Message) {
+    if (!window.confirm("删除这条消息？关联讨论将保留。")) return;
+    try {
+      await api(`/api/rooms/${activeRoom.id}/messages/${message.id}`, { method: "DELETE" });
+      setMessages((current) => current.map((item) => item.id === message.id ? { ...item, body: "消息已删除", contentParts: null } : item));
+    } catch (error) { setNotice(error instanceof Error ? error.message : "无法删除消息"); }
+  }
+
+  async function toggleReaction(message: Message, emoji: string) {
+    try {
+      await api(`/api/rooms/${activeRoom.id}/messages/${message.id}/reactions`, { method: "POST", body: JSON.stringify({ emoji }) });
+    } catch (error) { setNotice(error instanceof Error ? error.message : "无法设置表情"); }
   }
   async function createRoom() {
     const name = window.prompt("房间名称");
@@ -675,32 +747,37 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
 
   const messageList = messages.map((message, index) => {
     const member = members.find((item) => item.id === message.senderMemberId);
+    const previous = messages[index - 1];
+    const grouped = Boolean(previous && previous.senderMemberId === message.senderMemberId && (previous.kind ?? "TEXT") === (message.kind ?? "TEXT"));
     const assistant =
       message.kind === "AI" ||
       member?.principalType === "ASSISTANT" ||
       message.senderName === "大聪明";
-    const isOwn = !assistant && (message.senderMemberId === myMemberId || (message.status === "sending" && message.senderMemberId === myMemberId));
+    const isOwn = !assistant && (message.senderMemberId === myMemberId || (["sending", "failed"].includes(message.status ?? "") && message.senderMemberId === myMemberId));
     return (
       <article
-        className={`message${assistant ? " assistant" : ""}${isOwn ? " own" : ""}`}
+        id={`message-${message.id}`}
+        className={`message${assistant ? " assistant" : ""}${isOwn ? " own" : ""}${grouped ? " grouped" : ""}${highlightedMessageId === message.id ? " highlighted" : ""}`}
         key={message.id}
         style={{ animationDelay: `${Math.min(index * 35, 260)}ms`, ...(assistant && member?.primaryColor ? { "--agent-color": member.primaryColor } : {}) } as CSSProperties}
       >
-        <Avatar
-          name={message.senderName ?? member?.displayName}
-          assistant={assistant}
-          url={member?.avatarKey}
-          onClick={member ? () => setProfileMember(member) : undefined}
-        />
+        {grouped ? <div className="avatar-spacer" aria-hidden="true" /> : <Avatar name={message.senderName ?? member?.displayName} assistant={assistant} url={member?.avatarKey} onClick={member ? () => setProfileMember(member) : undefined} />}
         <div className="message-content">
-          <div className="message-meta">
+          {!grouped && <div className="message-meta">
             <span className="message-author">
               {message.senderName ?? member?.displayName ?? "未知"}
             </span>
             <span className="message-time">
               {formatTime(message.createdAt)}
             </span>
-          </div>
+            {message.editedAt && <span className="message-time">已编辑</span>}
+          </div>}
+          {message.replyTo && (
+            <button type="button" className="message-reply-preview" onClick={() => jumpToMessage(message.replyTo!.id)}>
+              <span>{message.replyTo.senderName ?? "原消息"}</span>
+              <span>{message.replyTo.body || "消息不可用"}</span>
+            </button>
+          )}
           {message.body && <p className="message-body">{renderBody(message.body)}</p>}
           {message.contentParts && message.contentParts.length > 0 && (
             <div className="message-images">
@@ -724,11 +801,27 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
                 ))}
             </div>
           )}
+          {message.reactions && Object.keys(message.reactions).length > 0 && <div className="message-reactions">
+            {Object.entries(message.reactions).map(([emoji, reaction]) => <button type="button" key={emoji} className={reaction.memberIds.includes(myMemberId ?? "") ? "active" : ""} onClick={() => void toggleReaction(message, emoji)} aria-label={`${emoji} ${reaction.count} 个回应`}>{emoji}<span>{reaction.count}</span></button>)}
+          </div>}
           {message.status && (
             <div className="message-status">
-              {message.status === "sending" ? "发送中…" : message.status}
+              {message.status === "sending" ? "发送中…" : message.status === "failed" ? "发送失败" : message.status}
+              {message.status === "failed" && <button type="button" className="message-retry" onClick={() => void retryMessage(message)}><RefreshCw size={12} /> 重试</button>}
             </div>
           )}
+          <Popover open={messageMenu === message.id} onOpenChange={(open) => setMessageMenu(open ? message.id : null)}>
+            <PopoverTrigger asChild><button type="button" className="message-menu-trigger" aria-label="消息操作" title="消息操作"><EllipsisVertical size={13} /></button></PopoverTrigger>
+            <PopoverContent align={isOwn ? "end" : "start"} className="w-32"><div className="more-menu">
+              <button type="button" className="more-menu-item" onClick={() => { void navigator.clipboard?.writeText(message.body); setMessageMenu(null); }}><Copy size={13} /> 复制</button>
+              {!message.id.startsWith("local-") && <button type="button" className="more-menu-item" onClick={() => { setReplyingTo(message); setMessageMenu(null); textareaRef.current?.focus(); }}><MessageSquareReply size={13} /> 回复</button>}
+              {!message.id.startsWith("local-") && <button type="button" className="more-menu-item" onClick={() => { setThreadRoot(message); setMessageMenu(null); }}><Hash size={13} /> 讨论</button>}
+              {!message.id.startsWith("local-") && <Popover><PopoverTrigger asChild><button type="button" className="more-menu-item"><Smile size={13} /> 回应</button></PopoverTrigger><PopoverContent className="reaction-picker" align="start">{REACTION_EMOJIS.map((emoji) => <button type="button" key={emoji} onClick={() => { setMessageMenu(null); void toggleReaction(message, emoji); }}>{emoji}</button>)}</PopoverContent></Popover>}
+              {isOwn && !message.id.startsWith("local-") && <button type="button" className="more-menu-item" onClick={() => { setMessageMenu(null); void editExistingMessage(message); }}><Settings2 size={13} /> 编辑</button>}
+              {isOwn && !message.id.startsWith("local-") && <button type="button" className="more-menu-item danger" onClick={() => { setMessageMenu(null); void deleteExistingMessage(message); }}><Trash2 size={13} /> 删除</button>}
+              {message.status === "failed" && <button type="button" className="more-menu-item" onClick={() => { setMessageMenu(null); void retryMessage(message); }}><RefreshCw size={13} /> 重试</button>}
+            </div></PopoverContent>
+          </Popover>
         </div>
       </article>
     );
@@ -789,7 +882,7 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
         <aside className={`rail${railOpen ? " open" : ""}`}>
           <div className="brand">
             <span className="brand-mark">↗</span>
-            <span className="brand-name">Smart Chat</span>
+            <span className="brand-name">EchoTalking</span>
             <span className="brand-note">v0.1</span>
           </div>
           <div className="rail-label">
@@ -801,7 +894,6 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
                   className={`new-message-button${totalUnread > 0 ? " active" : ""}`}
                   aria-label="新消息"
                   title="查看新消息"
-                  disabled={totalUnread === 0}
                 >
                   <Bell size={14} />
                   {totalUnread > 0 && (
@@ -809,7 +901,11 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
                   )}
                 </button>
               </PopoverTrigger>
-              <PopoverContent align="end" className="w-56">
+              <PopoverContent align="end" className="notification-popover">
+                <NotificationPanel onNavigate={(notification) => {
+                  const room = rooms.find((item) => item.id === notification.roomId);
+                  if (room) switchRoom(room);
+                }} />
                 <div className="unread-list">
                   <div className="unread-title">新消息</div>
                   {Object.entries(unreadByRoom).length === 0 && (
@@ -993,15 +1089,13 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
                 </p>
               </div>
               <div className="header-spacer" />
+              <button type="button" className="icon-button" aria-label="搜索当前房间消息" title="搜索消息" onClick={() => { setThreadRoot(null); setSearchOpen(true); }}><Search size={16} /></button>
             </header>
             <div className="message-scroll" aria-live="polite" ref={scrollRef}>
               <div className="day-rule">{todayLabel()}</div>
               <div className="messages">
                 {messageList}
-                {Object.values(runStatuses).filter((run) => !["succeeded", "success", "done", "cancelled", "no_action"].includes((run.status ?? "").toLowerCase())).map((run) => {
-                  const status = (run.status ?? "").toLowerCase();
-                  const failed = ["failed", "error", "failed_retryable", "failed_final"].includes(status);
-                  return (
+                {Object.values(runStatuses).filter((run) => !["succeeded", "success", "done", "no_action"].includes((run.status ?? "").toLowerCase())).map((run) => (
                   <article className="message assistant thinking" key={`run-${run.runId}`}>
                     <Avatar name={run.agentName || "AI 助手"} assistant />
                     <div className="message-content">
@@ -1009,23 +1103,10 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
                         <span className="message-author">{run.agentName || "AI 助手"}</span>
                         {run.mode && <span className="message-time">{run.mode === "DIRECT" ? "直达" : "自动调度"}</span>}
                       </div>
-                      <p className={`message-body thinking-body${failed ? " ai-error" : ""}`}>
-                        {failed ? <><AlertCircle size={13} /> {run.error === "provider_outcome_unknown" ? "图片服务连接超时，请检查网络或稍后重试" : run.error === "provider_api_key_missing" ? "图片模型未配置 API Key" : run.error?.startsWith("provider_http_") ? `图片服务请求失败（${run.error.replace("provider_http_", "HTTP ") }）` : "系统错误"}</> : <><LoaderCircle size={13} className="spin" /> {status === "routed" ? `已交给${run.agentName || "助手"}处理` : status === "generating" ? `正在生成${run.agentName ? ` · ${run.agentName}` : ""}` : status === "queued" ? `排队中${run.agentName ? ` · ${run.agentName}` : ""}` : "处理中…"}</>}
-                        {!failed && typeof run.progress === "number" && <span className="run-progress"> {Math.round(run.progress)}%</span>}
-                      </p>
-                      {run.status && failed && (
-                        <div className="run-actions">
-                          <button type="button" className="run-action" onClick={() => void actOnRun(run.runId, "retry")}><RefreshCw size={12} /> 重试</button>
-                          <button type="button" className="run-action" onClick={() => void actOnRun(run.runId, "cancel")}><Ban size={12} /> 取消</button>
-                        </div>
-                      )}
-                      {run.status && ["queued", "running", "generating", "routed", "pending"].includes(run.status.toLowerCase()) && (
-                        <div className="run-actions"><button type="button" className="run-action" onClick={() => void actOnRun(run.runId, "cancel")}><Ban size={12} /> 取消</button></div>
-                      )}
+                      <AgentRunTimeline status={run.status} errorCode={run.error} agentName={run.agentName} onRetry={() => void actOnRun(run.runId, "retry")} onCancel={() => void actOnRun(run.runId, "cancel")} />
                     </div>
                   </article>
-                  );
-                })}
+                ))}
                 {thinking && Object.keys(runStatuses).length === 0 && (
                   <article className="message assistant thinking">
                     <Avatar name={thinkingAgent || "大聪明"} assistant />
@@ -1048,6 +1129,8 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
               </div>
             </div>
             <div className="composer-wrap">
+              {typingMembers.length > 0 && <div className="typing-indicator" role="status">{typingMembers.slice(0, 2).map((item) => item.displayName).join("、")} 正在输入…</div>}
+              {replyingTo && <div className="composer-reply"><div><strong>回复 {replyingTo.senderName ?? "消息"}</strong><span>{replyingTo.body || "[图片]"}</span></div><button type="button" className="icon-button" onClick={() => setReplyingTo(null)} aria-label="取消回复" title="取消回复"><X size={14} /></button></div>}
               <div className="composer">
                 {mentionOpen && mentionOptions.length > 0 && (
                   <div
@@ -1141,7 +1224,7 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
               )}
             </div>
           </section>
-          <aside className="context-panel">
+          {threadRoot ? <ThreadPanel roomId={activeRoom.id} rootMessage={threadRoot} open onClose={() => setThreadRoot(null)} currentMemberId={myMemberId} currentMemberName={user?.displayName} /> : searchOpen ? <SearchPanel roomId={activeRoom.id} open onClose={() => setSearchOpen(false)} onSelectMessage={(message) => { setSearchOpen(false); jumpToMessage(message.id); }} /> : <aside className="context-panel">
             <div className="context-title">
               <h2>房间详情</h2>
               <button type="button" className="icon-button" aria-label="聊天室设置" title="聊天室设置" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /></button>
@@ -1234,7 +1317,7 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
                   </div>
                 ))}
             </div>
-          </aside>
+          </aside>}
         </main>
       </div>
       <Dialog open={joinOpen} onOpenChange={setJoinOpen}><DialogContent><DialogHeader><DialogTitle>申请加入聊天室</DialogTitle><DialogDescription>输入聊天室 ID 或 slug，提交后等待管理员审核。</DialogDescription></DialogHeader><div className="form-stack"><input className="text-input" placeholder="聊天室 ID 或 slug" value={joinRoomId} onChange={(e) => setJoinRoomId(e.target.value)} /><textarea className="text-input" placeholder="申请理由（可选）" value={joinReason} onChange={(e) => setJoinReason(e.target.value)} /><button type="button" className="primary-button" onClick={() => void submitJoinRequest()}>提交申请</button></div></DialogContent></Dialog>

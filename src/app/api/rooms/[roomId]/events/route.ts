@@ -1,6 +1,6 @@
 import { getCurrentUser } from "@/lib/auth/session";
 import { activeMembership, loadAgentNames, publicMessage } from "@/lib/chat";
-import { subscribeRoom } from "@/lib/chat/events";
+import { roomSignals, subscribeRoom } from "@/lib/chat/events";
 import { db } from "@/lib/db";
 import { errorResponse } from "@/lib/http";
 import { ensureAiWorker } from "@/lib/chat/ai-trigger";
@@ -43,6 +43,9 @@ export async function GET(request: Request, context: { params: Promise<{ roomId:
         }
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
       };
+      const signals = roomSignals(roomId);
+      for (const signal of signals.presence) send({ type: "presence", ...signal });
+      for (const signal of signals.typing) send({ type: "typing", ...signal });
 
       let eventChain = Promise.resolve();
       const unsubscribe = subscribeRoom(roomId, (event) => {
@@ -51,9 +54,14 @@ export async function GET(request: Request, context: { params: Promise<{ roomId:
           if (event.type === "message") {
             const full = await db.message.findUnique({
               where: { id: event.messageId },
-              include: { senderMember: { include: { user: { select: { displayName: true } } } }, mentions: true },
+              include: { senderMember: { include: { user: { select: { displayName: true } } } }, mentions: true, reactions: true },
             });
             if (full && !full.deletedAt) send({ type: "message", message: publicMessage(full, agentNames) });
+            return;
+          }
+          if (event.type === "thread_reply") {
+            const reply = await db.threadReply.findUnique({ where: { id: event.replyId }, include: { senderMember: { include: { user: { select: { displayName: true } } } } } });
+            if (reply && !reply.deletedAt) send({ type: "thread_reply", threadId: event.threadId, reply: { id: reply.id, threadId: reply.threadId, roomId: reply.roomId, senderMemberId: reply.senderMemberId, senderName: reply.senderMember?.user?.displayName, body: reply.body, sequence: reply.sequence, clientId: reply.clientId ?? undefined, createdAt: reply.createdAt } });
             return;
           }
           if (event.type === "ai_thinking") {
@@ -114,7 +122,7 @@ export async function GET(request: Request, context: { params: Promise<{ roomId:
             where: { roomId, deletedAt: null, ...(after > 0 ? { roomSequence: { gt: after } } : {}) },
             orderBy: { roomSequence: "asc" },
             take: 200,
-            include: { senderMember: { include: { user: { select: { displayName: true } } } }, mentions: true },
+            include: { senderMember: { include: { user: { select: { displayName: true } } } }, mentions: true, reactions: true },
           });
           for (const message of recent) send({ type: "message", message: publicMessage(message, agentNames) });
           const recentRuns = await db.aiRun.findMany({

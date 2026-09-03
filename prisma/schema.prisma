@@ -135,6 +135,7 @@ model User {
   invitationsSent      RoomInvitation[]  @relation("InvitationInviter")
   invitationsReceived  RoomInvitation[]  @relation("InvitationInvitee")
   authIdentities       AuthIdentity[]
+  notifications        Notification[]
 }
 
 model AuthIdentity {
@@ -180,23 +181,30 @@ model Session {
 }
 
 model Room {
-  id           String            @id @default(cuid())
-  name         String
-  slug         String            @unique
-  visibility   RoomVisibility    @default(PUBLIC)
-  status       RoomStatus        @default(ACTIVE)
-  createdById  String
-  lastSequence Int               @default(0)
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
-  createdBy    User              @relation("RoomCreator", fields: [createdById], references: [id])
-  members      RoomMember[]
-  messages     Message[]
-  supervisor   RoomSupervisor?
-  aiRuns       AiRun[]
-  outboxEvents OutboxEvent[]
-  joinRequests RoomJoinRequest[]
-  invitations  RoomInvitation[]
+  id            String            @id @default(cuid())
+  name          String
+  slug          String            @unique
+  visibility    RoomVisibility    @default(PUBLIC)
+  status        RoomStatus        @default(ACTIVE)
+  createdById   String
+  lastSequence  Int               @default(0)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  createdBy     User              @relation("RoomCreator", fields: [createdById], references: [id])
+  members       RoomMember[]
+  messages      Message[]
+  supervisor    RoomSupervisor?
+  aiRuns        AiRun[]
+  outboxEvents  OutboxEvent[]
+  joinRequests  RoomJoinRequest[]
+  invitations   RoomInvitation[]
+  threads       Thread[]
+  threadReplies ThreadReply[]
+  messagePins MessagePin[]
+  messageBookmarks MessageBookmark[]
+  notifications Notification[]
+  roomReads     RoomRead[]
+  artifacts     Artifact[]
 
   @@index([visibility, status, updatedAt])
 }
@@ -216,12 +224,32 @@ model RoomMember {
   user           User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
   sentMessages   Message[]        @relation("MessageSender")
   mentions       MessageMention[]
+  reactions      MessageReaction[]
+  createdThreads Thread[]         @relation("ThreadCreator")
+  threadReplies  ThreadReply[]    @relation("ThreadReplySender")
+  threadReads    ThreadRead[]
+  messageBookmarks MessageBookmark[]
+  roomReads      RoomRead[]
+  uploadedArtifacts Artifact[]
   aiRunsCalled   AiRun[]          @relation("AiCaller")
   aiRunsTargeted AiRun[]          @relation("AiRunTargetMember")
 
   @@index([roomId, leftAt])
   @@index([userId, roomId, leftAt])
   @@index([roomId, assistantKey, leftAt])
+}
+
+model MessageReaction {
+  id        String   @id @default(cuid())
+  messageId String
+  memberId  String
+  emoji     String
+  createdAt DateTime @default(now())
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  member    RoomMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, memberId, emoji])
+  @@index([messageId, emoji])
 }
 
 model RoomJoinRequest {
@@ -271,18 +299,109 @@ model Message {
   roomSequence   Int
   replyToId      String?
   createdAt      DateTime         @default(now())
+  editedAt       DateTime?
   deletedAt      DateTime?
   room           Room             @relation(fields: [roomId], references: [id], onDelete: Cascade)
   senderMember   RoomMember       @relation("MessageSender", fields: [senderMemberId], references: [id])
   replyTo        Message?         @relation("MessageReplies", fields: [replyToId], references: [id])
   replies        Message[]        @relation("MessageReplies")
+  threadRoot     Thread?          @relation("ThreadRoot")
   mentions       MessageMention[]
+  reactions      MessageReaction[]
   aiTrigger      AiRun[]          @relation("AiTrigger")
   aiResponse     AiRun?           @relation("AiResponse")
+  pins           MessagePin[]
+  bookmarks     MessageBookmark[]
 
   @@unique([roomId, roomSequence])
   @@unique([roomId, senderMemberId, clientId])
   @@index([roomId, createdAt])
+  @@index([roomId, kind, createdAt])
+}
+
+model MessagePin {
+  id        String   @id @default(cuid())
+  roomId    String
+  messageId String
+  pinnedBy  String
+  createdAt DateTime @default(now())
+  deletedAt DateTime?
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  @@unique([roomId, messageId])
+  @@index([roomId, deletedAt, createdAt])
+}
+
+model MessageBookmark {
+  id        String   @id @default(cuid())
+  roomId    String
+  messageId String
+  memberId  String
+  createdAt DateTime @default(now())
+  deletedAt DateTime?
+  room      Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  message   Message   @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  member    RoomMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  @@unique([roomId, messageId, memberId])
+  @@index([memberId, deletedAt, createdAt])
+}
+
+model Thread {
+  id                String        @id @default(cuid())
+  roomId            String
+  rootMessageId     String        @unique
+  createdByMemberId String
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  lastSequence      Int           @default(0)
+  room              Room          @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  rootMessage       Message       @relation("ThreadRoot", fields: [rootMessageId], references: [id], onDelete: Cascade)
+  createdByMember   RoomMember    @relation("ThreadCreator", fields: [createdByMemberId], references: [id])
+  replies           ThreadReply[]
+  reads             ThreadRead[]
+
+  @@index([roomId, updatedAt])
+}
+
+model ThreadReply {
+  id             String     @id @default(cuid())
+  threadId       String
+  roomId         String
+  senderMemberId String
+  body           String
+  clientId       String?
+  sequence       Int
+  createdAt      DateTime   @default(now())
+  deletedAt      DateTime?
+  thread         Thread     @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  room           Room       @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  senderMember   RoomMember @relation("ThreadReplySender", fields: [senderMemberId], references: [id])
+
+  @@unique([threadId, sequence])
+  @@unique([threadId, senderMemberId, clientId])
+  @@index([threadId, createdAt])
+}
+
+model ThreadRead {
+  threadId     String
+  memberId     String
+  lastSequence Int        @default(0)
+  updatedAt    DateTime   @updatedAt
+  thread       Thread     @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  member       RoomMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@id([threadId, memberId])
+}
+
+model RoomRead {
+  roomId       String
+  memberId     String
+  lastSequence Int        @default(0)
+  updatedAt    DateTime   @updatedAt
+  room         Room       @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  member       RoomMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@id([roomId, memberId])
 }
 
 model MessageMention {
@@ -553,6 +672,8 @@ model RoomSupervisor {
 
 model Artifact {
   id               String          @id @default(cuid())
+  roomId           String?
+  uploadedByMemberId String?
   runId            String?
   objectKey        String
   mimeType         String
@@ -566,10 +687,13 @@ model Artifact {
   deletedAt        DateTime?
   createdAt        DateTime        @default(now())
   run              AiRun?          @relation(fields: [runId], references: [id], onDelete: SetNull)
+  room             Room?           @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  uploadedByMember RoomMember?     @relation(fields: [uploadedByMemberId], references: [id], onDelete: SetNull)
   toolCallResults  AgentToolCall[] @relation("ToolCallResultArtifact")
 
   @@unique([objectKey])
   @@index([runId, createdAt])
+  @@index([roomId, createdAt])
   @@index([expiresAt, deletedAt])
 }
 
@@ -586,6 +710,35 @@ model OutboxEvent {
   run         AiRun?    @relation(fields: [runId], references: [id], onDelete: SetNull)
 
   @@index([publishedAt, createdAt])
+  @@index([roomId, createdAt])
+}
+
+enum NotificationType {
+  MENTION
+  THREAD_REPLY
+  APPROVAL
+  AGENT_COMPLETED
+  AGENT_FAILED
+}
+
+model Notification {
+  id          String           @id @default(cuid())
+  userId      String
+  roomId      String?
+  type        NotificationType
+  title       String
+  summary     String
+  sourceId    String?
+  sourceType  String?
+  dedupeKey   String           @unique
+  readAt      DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime         @default(now())
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  room        Room?            @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@index([userId, createdAt])
   @@index([roomId, createdAt])
 }
 

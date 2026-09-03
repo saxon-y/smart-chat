@@ -12,6 +12,7 @@ import { cancelRun, retryRun } from "@/lib/harness/orchestration/cancellation";
 import { recordRunFailure } from "@/lib/harness/orchestration/completion";
 import { recoverRuns } from "@/lib/harness/orchestration/recovery";
 import { projectFinalMessage } from "@/lib/harness/orchestration/result-projector";
+import { createNotification } from "@/lib/notifications";
 
 const DEFAULT_SYSTEM_PROMPT = "你是聊天室助手。用简体中文简洁、清楚地回复，只根据当前房间上下文作答。";
 
@@ -175,6 +176,8 @@ export async function processAiRun(runId: string) {
     else await runAgent(run);
     const completed = await loadRun(runId);
     if (completed?.status === AiRunStatus.SUCCEEDED && completed.targetAgent) {
+      const caller = await db.roomMember.findUnique({ where: { id: completed.callerMemberId }, select: { userId: true } });
+      if (caller?.userId) await createNotification({ userId: caller.userId, roomId: completed.roomId, type: "AGENT_COMPLETED", title: `${completed.targetAgent.name} 已完成`, summary: "Agent 已完成本次请求。", sourceId: completed.id, sourceType: "ai_run", dedupeKey: `agent_done:${completed.id}` });
       publishAgentEvent({ type: "agent_done", roomId: completed.roomId, runId: completed.id, agentKey: completed.targetAgent.key, agentName: completed.targetAgent.name, mode: completed.mode, status: "succeeded", ok: true });
     }
   } catch (error) {
@@ -182,6 +185,8 @@ export async function processAiRun(runId: string) {
     const errorCode = /^[a-z0-9_]+$/.test(raw) ? raw : "provider_request_failed";
     const nextStatus = await recordRunFailure({ runId: run.id, roomId: run.roomId, owner: run.owner, leaseGeneration: run.leaseGeneration, attempt: run.attempt, errorCode });
     const agent = run.targetAgent ?? run.room.supervisor?.agent;
+    const caller = await db.roomMember.findUnique({ where: { id: run.callerMemberId }, select: { userId: true } });
+    if (caller?.userId) await createNotification({ userId: caller.userId, roomId: run.roomId, type: "AGENT_FAILED", title: `${agent?.name ?? "Agent"} 未完成`, summary: "Agent 执行失败，请查看运行详情后重试。", sourceId: run.id, sourceType: "ai_run", dedupeKey: `agent_failed:${run.id}:${nextStatus}` });
     publishAgentEvent({ type: "agent_done", roomId: run.roomId, runId: run.id, agentKey: agent?.key ?? "unknown", agentName: agent?.name ?? "AI 助手", mode: run.mode, status: nextStatus.toLowerCase(), ok: false, error: errorCode });
     throw new Error(errorCode);
   }

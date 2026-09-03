@@ -18,8 +18,8 @@ const mono = DM_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Smart Chat",
-  description: "一个专注、安静的团队文字聊天室。",
+  title: "EchoTalking",
+  description: "人与智能体共同参与的多人聊天空间。",
 };
 
 const themeInit = `(function(){try{var c=localStorage.getItem('smartchat_theme');if(!c)c='#c7613d';document.documentElement.style.setProperty('--theme',c);}catch(e){}})();`;

@@ -92,7 +92,7 @@ export default function AuthForm({ mode, oauthError }: { mode: "login" | "regist
       <section className="auth-aside">
         <div className="brand">
           <span className="brand-mark">↗</span>
-          <span className="brand-name">Smart Chat</span>
+          <span className="brand-name">EchoTalking</span>
         </div>
         <div className="auth-quote">
           <h1>
@@ -205,7 +205,7 @@ export default function AuthForm({ mode, oauthError }: { mode: "login" | "regist
               {busy
                 ? "处理中…"
                 : mode === "login"
-                  ? "进入 Smart Chat"
+                  ? "进入 EchoTalking"
                   : "创建账号"}
             </button>
           </form>
