@@ -27,16 +27,16 @@ jobs:
         id: tag
         run: |
           tag="${{ inputs.image_tag }}"
-          case "$tag" in
-            sha-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
-            v[0-9]*) ;;
-            *)
-              echo "Refusing tag '$tag'. Use sha-<git-sha> or v1.2.0."
-              exit 1
-              ;;
-          esac
-          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "git_ref=${tag#sha-}" >> "$GITHUB_OUTPUT"
+          if [[ "$tag" =~ ^sha-[0-9a-f]{7,40}$ ]]; then
+            echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "git_ref=${tag#sha-}" >> "$GITHUB_OUTPUT"
+          elif [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "git_ref=$tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "Refusing tag '$tag'. Use sha-<git-sha> or v1.2.3"
+            exit 1
+          fi
 
       - name: Checkout
         uses: actions/checkout@v4
