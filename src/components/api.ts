@@ -34,12 +34,23 @@ export type Message = {
   senderName?: string;
   kind?: string;
   createdAt?: string;
+  editedAt?: string | null;
   status?: string;
   clientId?: string | null;
   roomSequence?: number;
   mentions?: Array<{ memberId: string; start: number; end: number }>;
   contentParts?: Array<{ type: string; dataUrl?: string; url?: string; name?: string; alt?: string }> | null;
   metadata?: Record<string, unknown> | null;
+  reactions?: Record<string, { count: number; memberIds: string[] }>;
+  replyTo?: {
+    id: string;
+    roomId: string;
+    senderMemberId?: string;
+    senderName?: string;
+    body?: string;
+    kind?: string;
+    createdAt?: string;
+  } | null;
 };
 
 export type AgentRun = {

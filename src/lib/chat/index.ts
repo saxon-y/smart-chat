@@ -5,9 +5,12 @@ export { messageBodySchema, validateMessageBody, extractMentionNames } from "./v
 import { validateMessageBody, type ImageAttachment } from "./validation";
 import { Prisma } from "@prisma/client";
 import { publishAgentEvent, publishMessage } from "./events";
+import { createNotification } from "@/lib/notifications";
 
 export const ASSISTANT_KEY = "da-cong-ming";
 export const ASSISTANT_NAME = "大聪明";
+export const ALLOWED_REACTION_EMOJIS = ["👍", "❤️", "😂", "🎉", "😮", "😢", "😡"] as const;
+export type ReactionEmoji = typeof ALLOWED_REACTION_EMOJIS[number];
 
 export type MentionInput = { memberId?: string; name?: string; start?: number; end?: number };
 
@@ -40,7 +43,8 @@ export async function resolveMentions(roomId: string, mentions: MentionInput[] =
 }
 
 type MemberRecord = { id: string; principalType: PrincipalType; assistantKey?: string | null; userId?: string | null; user?: { displayName: string; avatarKey?: string | null } | null; roomRole: RoomRole; joinedAt: Date };
-type MessageRecord = { id: string; roomId: string; senderMemberId: string; kind: string; body: string; contentParts: Prisma.JsonValue | null; roomSequence: number; clientId: string | null; createdAt: Date; senderMember?: MemberRecord | null; mentions?: Array<{ memberId: string; start: number; end: number }> };
+type MessageRecord = { id: string; roomId: string; senderMemberId: string; kind: string; body: string; contentParts: Prisma.JsonValue | null; roomSequence: number; clientId: string | null; createdAt: Date; editedAt?: Date | null; deletedAt?: Date | null; senderMember?: MemberRecord | null; mentions?: Array<{ memberId: string; start: number; end: number }>; reactions?: Array<{ emoji: string; memberId: string }>; replyTo?: ReplyMessageRecord | null };
+type ReplyMessageRecord = Pick<MessageRecord, "id" | "roomId" | "senderMemberId" | "kind" | "body" | "createdAt"> & { senderMember?: MemberRecord | null };
 export async function loadAgentNames(): Promise<Record<string, string>> {
   const agents = await db.agent.findMany({ select: { key: true, name: true } });
   const map: Record<string, string> = {};
@@ -75,10 +79,29 @@ export function publicMessage(message: MessageRecord, agentNames?: Record<string
   const senderName = sender?.principalType === PrincipalType.ASSISTANT
     ? (sender.assistantKey && agentNames?.[sender.assistantKey]) ? agentNames[sender.assistantKey] : ASSISTANT_NAME
     : sender?.user?.displayName;
-  return { id: message.id, roomId: message.roomId, senderMemberId: message.senderMemberId, senderName, kind: message.kind, body: message.body, contentParts: message.contentParts, roomSequence: message.roomSequence, clientId: message.clientId || undefined, createdAt: message.createdAt, mentions: message.mentions?.map((mention) => ({ memberId: mention.memberId, start: mention.start, end: mention.end })) ?? [] };
+  const reply = message.replyTo;
+  const replySender = reply?.senderMember;
+  const replySenderName = replySender?.principalType === PrincipalType.ASSISTANT
+    ? (replySender.assistantKey && agentNames?.[replySender.assistantKey]) ? agentNames[replySender.assistantKey] : ASSISTANT_NAME
+    : replySender?.user?.displayName;
+  const reactions = Object.fromEntries((message.reactions ?? []).reduce((map, reaction) => { const item = map.get(reaction.emoji) ?? { count: 0, memberIds: [] as string[] }; item.count += 1; item.memberIds.push(reaction.memberId); map.set(reaction.emoji, item); return map; }, new Map<string, { count: number; memberIds: string[] }>()));
+  return { id: message.id, roomId: message.roomId, senderMemberId: message.senderMemberId, senderName, kind: message.kind, body: message.body, contentParts: message.contentParts, roomSequence: message.roomSequence, clientId: message.clientId || undefined, createdAt: message.createdAt, editedAt: message.editedAt ?? null, mentions: message.mentions?.map((mention) => ({ memberId: mention.memberId, start: mention.start, end: mention.end })) ?? [], reactions, replyTo: reply ? { id: reply.id, roomId: reply.roomId, senderMemberId: reply.senderMemberId, senderName: replySenderName, kind: reply.kind, body: reply.body.length > 280 ? `${reply.body.slice(0, 280)}...` : reply.body, createdAt: reply.createdAt } : null };
 }
 
-export async function createMessage(input: { roomId: string; memberId: string; body: string; attachments?: ImageAttachment[]; metadata?: { imagePrompt?: { style: string; size: string; aspect: string } }; aiAllowed?: boolean; clientId?: string; mentions?: MentionInput[]; requestId: string }) {
+export async function toggleMessageReaction(input: { roomId: string; messageId: string; memberId: string; emoji: string }) {
+  if (!(ALLOWED_REACTION_EMOJIS as readonly string[]).includes(input.emoji)) throw new Error("不支持的表情");
+  const result = await db.$transaction(async (tx) => {
+    const message = await tx.message.findFirst({ where: { id: input.messageId, roomId: input.roomId, deletedAt: null }, select: { id: true } });
+    if (!message) throw new Error("消息不存在");
+    const existing = await tx.messageReaction.findUnique({ where: { messageId_memberId_emoji: { messageId: message.id, memberId: input.memberId, emoji: input.emoji } } });
+    if (existing) { await tx.messageReaction.delete({ where: { id: existing.id } }); return false; }
+    await tx.messageReaction.create({ data: { messageId: message.id, memberId: input.memberId, emoji: input.emoji } }); return true;
+  });
+  publishMessage(input.roomId, input.messageId);
+  return { active: result };
+}
+
+export async function createMessage(input: { roomId: string; memberId: string; body: string; attachments?: ImageAttachment[]; metadata?: { imagePrompt?: { style: string; size: string; aspect: string } }; aiAllowed?: boolean; clientId?: string; mentions?: MentionInput[]; replyToId?: string | null; requestId: string }) {
   const checked = validateMessageBody(input.body, Boolean(input.attachments && input.attachments.length > 0));
   if (!checked.ok) throw new Error(checked.message);
   const attachments = input.attachments ?? [];
@@ -90,15 +113,21 @@ export async function createMessage(input: { roomId: string; memberId: string; b
     const member = await tx.roomMember.findFirst({ where: { id: input.memberId, roomId: input.roomId, principalType: PrincipalType.USER, leftAt: null } });
     if (!member) throw new Error("需要先加入该房间");
     if (member.mutedUntil && member.mutedUntil > new Date()) throw new Error("ROOM_MEMBER_MUTED");
+    let replyToId: string | null = null;
+    if (input.replyToId) {
+      const reply = await tx.message.findFirst({ where: { id: input.replyToId, roomId: input.roomId, deletedAt: null }, select: { id: true } });
+      if (!reply) throw new Error("引用消息不存在或不属于当前房间");
+      replyToId = reply.id;
+    }
     if (input.clientId) {
-      const existing = await tx.message.findFirst({ where: { roomId: input.roomId, senderMemberId: member.id, clientId: input.clientId }, include: { senderMember: { include: { user: true } }, mentions: true } });
+      const existing = await tx.message.findFirst({ where: { roomId: input.roomId, senderMemberId: member.id, clientId: input.clientId }, include: { senderMember: { include: { user: true } }, mentions: true, replyTo: { include: { senderMember: { include: { user: true } } } } } });
       if (existing) {
         const aiRun = await tx.aiRun.findFirst({ where: { triggerMessageId: existing.id, mode: { in: [AiRunMode.DIRECT, AiRunMode.SUPERVISOR] } }, include: { targetAgent: true } });
         return { message: existing, aiRun, duplicate: true };
       }
     }
     const room = await tx.room.update({ where: { id: input.roomId }, data: { lastSequence: { increment: 1 } } });
-    const message = await tx.message.create({ data: { roomId: input.roomId, senderMemberId: member.id, body: checked.body, contentParts: contentParts ?? undefined, clientId: input.clientId, roomSequence: room.lastSequence, mentions: { create: mentionData.map(({ member, start, end }) => ({ memberId: member.id, start, end })) } }, include: { senderMember: { include: { user: true } }, mentions: true } });
+    const message = await tx.message.create({ data: { roomId: input.roomId, senderMemberId: member.id, body: checked.body, contentParts: contentParts ?? undefined, clientId: input.clientId, roomSequence: room.lastSequence, replyToId, mentions: { create: mentionData.map(({ member, start, end }) => ({ memberId: member.id, start, end })) } }, include: { senderMember: { include: { user: true } }, mentions: true, replyTo: { include: { senderMember: { include: { user: true } } } } } });
     const assistantMentions = mentionData.filter(({ member }) => member.principalType === PrincipalType.ASSISTANT && member.assistantKey);
     if (assistantMentions.length > 1) throw new Error("一次只能调用一个 Agent");
     const queueDepth = await tx.aiRun.count({ where: { roomId: input.roomId, status: { in: ["PENDING", "FAILED_RETRYABLE"] } } });
@@ -163,6 +192,10 @@ export async function createMessage(input: { roomId: string; memberId: string; b
     return { message, aiRun, duplicate: false };
   });
   if (!result.duplicate) publishMessage(input.roomId, result.message.id);
+  if (!result.duplicate && result.message.mentions?.length) {
+    const mentioned = await db.roomMember.findMany({ where: { id: { in: result.message.mentions.map((mention) => mention.memberId) }, roomId: input.roomId, principalType: PrincipalType.USER, leftAt: null }, select: { id: true, userId: true } });
+    await Promise.all(mentioned.filter((member) => member.userId && member.id !== input.memberId).map((member) => createNotification({ userId: member.userId!, roomId: input.roomId, type: "MENTION", title: "有人提到了你", summary: checked.body, sourceId: result.message.id, sourceType: "message", dedupeKey: `mention:${result.message.id}:${member.userId}` })));
+  }
   if (!result.duplicate && result.aiRun) {
     publishAgentEvent({
       type: "agent_queued",
@@ -175,6 +208,25 @@ export async function createMessage(input: { roomId: string; memberId: string; b
     });
   }
   return result;
+}
+
+export async function editMessage(input: { roomId: string; memberId: string; messageId: string; body: string }) {
+  const checked = validateMessageBody(input.body);
+  if (!checked.ok) throw new Error(checked.message);
+  return db.$transaction(async (tx) => {
+    const message = await tx.message.findFirst({ where: { id: input.messageId, roomId: input.roomId, senderMemberId: input.memberId, deletedAt: null } });
+    if (!message) throw new Error("消息不存在或无权编辑");
+    if (message.kind !== "TEXT") throw new Error("该消息类型不支持编辑");
+    return tx.message.update({ where: { id: message.id }, data: { body: checked.body, editedAt: new Date() }, include: { senderMember: { include: { user: true } }, mentions: true, replyTo: { include: { senderMember: { include: { user: true } } } } } });
+  });
+}
+
+export async function deleteMessage(input: { roomId: string; memberId: string; messageId: string }) {
+  return db.$transaction(async (tx) => {
+    const message = await tx.message.findFirst({ where: { id: input.messageId, roomId: input.roomId, senderMemberId: input.memberId, deletedAt: null } });
+    if (!message) throw new Error("消息不存在或无权删除");
+    return tx.message.update({ where: { id: message.id }, data: { deletedAt: new Date() }, include: { senderMember: { include: { user: true } }, mentions: true, replyTo: { include: { senderMember: { include: { user: true } } } } } });
+  });
 }
 
 export async function joinRoom(roomId: string, userId: string) {

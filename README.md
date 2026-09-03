@@ -1,6 +1,6 @@
-# Smart Chat
+# EchoTalking
 
-基于 Next.js 16、TypeScript、PostgreSQL 的多人文字聊天室。支持注册登录、头像昵称、公开房间、加入/退出、结构化 `@` 提及、默认 AI 成员“大聪明”和管理员 AI 模型配置。
+基于 Next.js 16、TypeScript、PostgreSQL 的多人聊天空间，让人与智能体共同参与协作。支持注册登录、头像昵称、公开房间、加入/退出、结构化 `@` 提及、默认 AI 成员“大聪明”和管理员 AI 模型配置。
 
 ## 技术栈
 

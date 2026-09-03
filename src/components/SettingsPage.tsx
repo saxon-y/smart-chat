@@ -334,7 +334,7 @@ export default function SettingsPage() {
                 <span className="theme-preview-chip" style={{ background: themeColor }}>按钮预览</span>
               </div>
               <h2 style={{ marginTop: 28 }}>工作区默认项</h2>
-              <p>几项安静的偏好，用来调整 Smart Chat 的感觉。</p>
+              <p>几项安静的偏好，用来调整 EchoTalking 的感觉。</p>
               <div className="toggle-row">
                 <div className="toggle-copy">
                   <strong>专注模式</strong>
@@ -368,7 +368,7 @@ export default function SettingsPage() {
                   <ShieldCheck size={12} /> 会话已保护
                 </span>
                 <p style={{ marginTop: 10 }}>
-                  Smart Chat 使用 HttpOnly 会话 Cookie。你的密码和房间权限都保存在服务器上。
+                  EchoTalking 使用 HttpOnly 会话 Cookie。你的密码和房间权限都保存在服务器上。
                 </p>
               </div>
             </section>

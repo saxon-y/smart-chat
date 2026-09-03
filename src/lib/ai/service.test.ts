@@ -10,7 +10,8 @@ const db = {
   message: { create: vi.fn(), findMany: vi.fn() },
   outboxEvent: { create: vi.fn() },
   room: { update: vi.fn() },
-  roomMember: { findFirst: vi.fn(), findMany: vi.fn() },
+  roomMember: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn() },
+  notification: { upsert: vi.fn() },
   agent: { findFirst: vi.fn(), findMany: vi.fn() },
 };
 const callChatProvider = vi.fn();
@@ -88,6 +89,8 @@ describe("AI run service", () => {
     db.message.findMany.mockResolvedValue([{ body: "hello", kind: MessageKind.TEXT, senderMember: { principalType: PrincipalType.USER } }]);
     callChatProvider.mockResolvedValue({ content: "answer", tokenUsage: 23 });
     db.roomMember.findFirst.mockResolvedValue(run.targetMember);
+    db.roomMember.findUnique.mockResolvedValue({ userId: "caller-user" });
+    db.notification.upsert.mockResolvedValue({ id: "notification-1" });
     db.aiRun.updateMany.mockResolvedValueOnce({ count: 1 });
     db.room.update.mockResolvedValue({ lastSequence: 7 });
     db.message.create.mockResolvedValue({ id: "response-1" });

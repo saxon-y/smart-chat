@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const tx = {
   agentApproval: { findFirst: vi.fn(), updateMany: vi.fn(), count: vi.fn(), findUniqueOrThrow: vi.fn() },
   roomMember: { findFirst: vi.fn() },
-  aiRun: { updateMany: vi.fn() },
+  aiRun: { updateMany: vi.fn(), findUnique: vi.fn() },
+  notification: { upsert: vi.fn() },
 };
 const db = { $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
 vi.mock("@/lib/db", () => ({ db }));
@@ -20,6 +21,8 @@ describe("decideAgentApproval", () => {
     tx.agentApproval.count.mockResolvedValue(0);
     tx.agentApproval.findUniqueOrThrow.mockResolvedValue({ ...pending, status: "APPROVED" });
     tx.aiRun.updateMany.mockResolvedValue({ count: 1 });
+    tx.aiRun.findUnique.mockResolvedValue({ callerMember: { userId: "caller-user" } });
+    tx.notification.upsert.mockResolvedValue({ id: "notification-1" });
   });
 
   it("atomically decides an approval and resumes a run with no pending approvals", async () => {

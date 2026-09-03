@@ -1,0 +1,6 @@
+CREATE TABLE "RoomRead" (
+  "roomId" TEXT NOT NULL, "memberId" TEXT NOT NULL, "lastSequence" INTEGER NOT NULL DEFAULT 0,
+  "updatedAt" TIMESTAMP(3) NOT NULL, CONSTRAINT "RoomRead_pkey" PRIMARY KEY ("roomId", "memberId")
+);
+ALTER TABLE "RoomRead" ADD CONSTRAINT "RoomRead_roomId_fkey" FOREIGN KEY ("roomId") REFERENCES "Room"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "RoomRead" ADD CONSTRAINT "RoomRead_memberId_fkey" FOREIGN KEY ("memberId") REFERENCES "RoomMember"("id") ON DELETE CASCADE ON UPDATE CASCADE;
