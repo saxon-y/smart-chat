@@ -45,24 +45,47 @@ https://github.com/saxon-y/smart-chat/actions
 
 不改这一项时，CI 能过，但 `Publish image` 推 GHCR 会 `403`。
 
-## 3. 你来做：确认 CI 在 GitHub 上变绿
+## 3. 你来做：用 PR CI 挡住未通过的合并
 
-推到 `main` 或开 PR 后，工作流 **CI** 应执行：
+推 `main` 不再跑 CI。合并前必须开 Pull Request，工作流 **CI** 会执行：
 
 ```text
 npm ci → prisma generate → prisma migrate deploy（临时 PostgreSQL）
 → lint → typecheck → test → next build
 ```
 
-CI 成功后，`main` 上的 **Publish image** 会自动开始。第一次镜像构建大约 5–15 分钟。
+CI 变绿只表示这份改动可以合进 `main`，**不会**构建镜像。
+
+要真正禁止红灯合并，还需要你在 GitHub 打开分支保护（workflow 自己做不到这件事）：
+
+1. 先随便开一个 PR，让检查 `CI / lint-typecheck-test-build` 至少成功出现一次
+2. 打开 `https://github.com/saxon-y/smart-chat/settings/rules`
+3. New ruleset，目标分支 `main`
+4. 勾选 **Require a pull request before merging**
+5. 勾选 **Require status checks to pass**，添加 `lint-typecheck-test-build`
+6. 勾选 **Block force pushes**
+7. 保存
+
+没有这一步时，管理员仍可直接 push `main`，绕过 CI。
+
+要发布镜像，在已经合进 `main` 的 commit 上打版本 tag 并推送：
+
+```bash
+git checkout main
+git pull --ff-only
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+tag 必须是 `v` 加三段数字，例如 `v0.1.0`。`v1.2`、`v1.2.3-rc.1`、`release-1` 不会触发构建。推送后 **Publish image** 会先校验 tag 格式，再跑一遍同样的 CI，通过后才构建镜像。CI 失败或格式不对则不会推 GHCR。
 
 成功标志：
 
-- Actions 里 `Publish image` 为绿色
-- 摘要里有 `sha-<12位commit>` 和 digest
+- Actions 里这次 tag 的 `Publish image` 为绿色，其中 `recheck` 和 `build-and-push` 都成功
+- 摘要里有 `v0.1.0`、`sha-<12位commit>` 和 digest
 - 打开 `https://github.com/saxon-y/smart-chat/pkgs/container/smart-chat` 能看到镜像
 
-如果 `Publish image` 没出现：看 CI 是否失败，或是否只跑了 PR（PR 成功不会发镜像，只有 `main` 的 push CI 成功才会发）。
+如果 `Publish image` 没出现：确认 tag 已推到 GitHub，且名称符合 `v1.2.3` 这种形式，而不是只 push 了 `main`。
 
 ## 4. 你来做：把 GHCR 包关联到仓库（第一次发布后）
 
@@ -242,10 +265,11 @@ make deploy-image TAG=sha-...
 
 以后正常发版：
 
-1. 改动进入 `main`
-2. 等 **CI** 和 **Publish image** 变绿
-3. 再手动跑 **Deploy production**，填新的 `sha-...`
-4. 点审批
+1. 开 PR，等 **CI** 变绿后合并进 `main`
+2. 打版本 tag 并推送，例如 `git tag v0.1.1 && git push origin v0.1.1`
+3. 等 **Publish image** 变绿（它会先复跑 CI，再构建镜像）
+4. 再手动跑 **Deploy production**，填 `v0.1.1` 或摘要里的 `sha-...`
+5. 点审批
 
 服务器应急（SSH 上直接发）：
 
@@ -281,15 +305,15 @@ ALLOW_LOCAL_BUILD_REDEPLOY=1 make redeploy
 
 ## 12. 建议稍后做、但不是第一次切换的阻塞项
 
-- 给 `main` 加规则：Required check 选 `lint-typecheck-test-build`，避免没过 CI 的 commit 直接进 `main`
+- 给 `main` 加规则：Require pull request，Required check 选 `lint-typecheck-test-build`，避免没过 CI 的 commit 直接进 `main`
 - 演练一次 migration 失败（备份在、应用容器没被换成坏版本）
 - 演练一次 `make rollback-image`
 - CI 变绿后的自动部署先不要开；至少成功完成一次手动发布、一次回滚观察后再说
 
 ## 13. 我这边已经改好的内容
 
-- CI：PR 和 `main` 都会跑测试与生产构建
-- 镜像发布：`main` 的 CI 成功后推 `sha-<12位>`、`sha-<完整>`，并打 `main` 标签
+- CI：Pull Request 跑测试与生产构建，作为合进 `main` 的门禁
+- 镜像发布：推送 `v*.*.*` tag 后先复跑 CI，通过才推 `sha-<12位>`、`sha-<完整>` 和版本标签。推送 `main` 不再跑 CI、也不构建镜像。
 - 生产部署 workflow：只接受手动输入的 SHA/版本标签，走 `production` Environment 审批和 SSH
 - `compose.production.yaml`：去掉 `build`，Web/Worker/Runtime 使用同一 GHCR 标签
 - `scripts/deploy-image.sh`：备份、拉镜像、migrate、健康检查、写 `.deploy/image.env`
