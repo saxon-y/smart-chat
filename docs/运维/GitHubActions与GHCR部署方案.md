@@ -6,6 +6,7 @@
 - 目标环境：腾讯云 CVM、Docker Compose
 - 镜像仓库：GitHub Container Registry（GHCR）
 - 发布分支：`main`
+- 镜像发布触发：推送 `v*.*.*` Git tag
 - 对应实现：`.github/workflows/`、`compose.production.yaml`、`scripts/deploy-image.sh`
 - 你需要配合的操作步骤见 [GHCR 部署实施清单](GHCR部署实施清单.md)
 - 自动部署（阶段 E）尚未开启，生产发布只允许手动 `workflow_dispatch`
@@ -17,11 +18,16 @@
 ```text
 Pull Request
   -> CI 测试
+  -> CI 通过后才能合并 main
 
 main 更新
-  -> CI 测试通过
-  -> GitHub Actions 构建镜像
-  -> 推送 GHCR（commit SHA 标签）
+  -> 不跑 CI
+  -> 不构建镜像
+
+打 v*.*.* tag 并推送
+  -> 再跑一遍 CI
+  -> CI 通过后 GitHub Actions 构建镜像
+  -> 推送 GHCR（版本标签 + commit SHA 标签）
   -> 生产环境审批
   -> SSH 到腾讯云
   -> 备份 PostgreSQL
@@ -75,17 +81,11 @@ main 更新
 ghcr.io/saxon-y/smart-chat
 ```
 
-每个成功构建至少发布两个标签：
-
-```text
-ghcr.io/saxon-y/smart-chat:sha-<完整或短commit-sha>
-ghcr.io/saxon-y/smart-chat:main
-```
-
-正式发布可以增加：
+每个成功构建至少发布这些标签：
 
 ```text
 ghcr.io/saxon-y/smart-chat:v1.2.0
+ghcr.io/saxon-y/smart-chat:sha-<完整或短commit-sha>
 ```
 
 生产 Compose 必须使用 SHA 标签作为部署真值，不建议直接部署可变的 `latest` 或 `main`：
@@ -101,7 +101,7 @@ SMART_CHAT_IMAGE_TAG=sha-a1b2c3d4...
 ${SMART_CHAT_IMAGE}:${SMART_CHAT_IMAGE_TAG}
 ```
 
-`main` 用于人工查看最新构建，SHA 标签用于部署、审计和回滚。
+版本标签便于识别发布，SHA 标签用于部署、审计和回滚。不要部署可变的 `latest`。
 
 ## 5. 工作流拆分
 
@@ -118,8 +118,7 @@ ${SMART_CHAT_IMAGE}:${SMART_CHAT_IMAGE_TAG}
 
 触发条件：
 
-- Pull Request 创建或更新。
-- `main` 分支 push。
+- 打开或更新指向任意分支的 Pull Request。
 
 执行：
 
@@ -135,24 +134,27 @@ next build
 
 CI 只需要测试数据库和测试密钥，不能访问生产 `.env`。
 
-建议将 CI 设为 `main` 分支保护的 Required Check，禁止绕过失败测试直接合并。
+建议将 CI 设为 `main` 分支保护的 Required Check，并要求通过 Pull Request 合并。这样没过 CI 的改动无法进入主干。直接 push `main` 不会再跑 CI，也不应作为日常路径。
 
 ### 5.2 镜像发布
 
 触发条件：
 
-- `main` 的 CI 成功。
-- 或创建版本 tag。
+- 推送符合 `v主版本.次版本.补丁` 的 Git tag，例如 `v0.1.0`、`v1.2.3`。`v1.2`、`v1.2.3-rc.1`、`1.2.3` 都不会构建。
+- 或手动 `workflow_dispatch`（用于重试已有 commit，不作为日常路径）。
+
+推送 `main` 不跑 CI，也不构建镜像。tag 工作流会先复用同一套 CI，失败则不构建。
 
 执行：
 
-1. Checkout CI 已验证的准确 SHA。
-2. 登录 GHCR。
-3. 使用 BuildKit/Buildx 构建镜像。
-4. 使用 GitHub Actions cache 加速 npm 和 Docker layer。
-5. 推送 SHA 标签和 `main`/版本标签。
-6. 扫描镜像漏洞。
-7. 输出镜像 digest。
+1. Checkout 该 tag 指向的 commit，并确认它属于 `main` 历史。
+2. 重新执行 lint、typecheck、test 和生产构建。
+3. CI 通过后再登录 GHCR。
+4. 使用 BuildKit/Buildx 构建镜像。
+5. 使用 GitHub Actions cache 加速 npm 和 Docker layer。
+6. 推送 SHA 标签和版本标签。
+7. 扫描镜像漏洞。
+8. 输出镜像 digest。
 
 部署记录应同时保存 tag 和 digest：
 
@@ -438,7 +440,7 @@ Caddy 和 PostgreSQL 通常不随应用回滚。
 
 - [x] 新增 `publish-image.yml`。
 - [x] 修改 Dockerfile 以提高缓存和最小化运行镜像。
-- [ ] 发布 SHA 标签、`main` 标签、digest、SBOM（需 `main` CI 成功后由 Actions 执行）。
+- [ ] 发布 SHA 标签、版本标签、digest、SBOM（需推送 `v*.*.*` tag 后由 Actions 执行）。
 - [ ] 在非生产机器验证 `docker pull` 和启动。
 
 ### 阶段 C：生产 Compose 远程镜像化
@@ -479,6 +481,6 @@ Caddy 和 PostgreSQL 通常不随应用回滚。
 
 ## 19. 推荐决策
 
-采用“CI、镜像发布、生产部署”三个独立工作流。GitHub Actions 构建并推送 commit SHA 镜像，腾讯云仅拉取和运行该镜像。数据库继续由 PostgreSQL 作为权威状态，migration 使用 expand/contract；生产部署以 SHA 标签和 digest 为审计依据，以 GitHub Environment 审批、Actions concurrency 和服务器部署锁控制风险。
+采用“CI、镜像发布、生产部署”三个独立工作流。合进 `main` 前由 Pull Request CI 门禁；推送 `v*.*.*` tag 后先复跑 CI，通过才构建并推送镜像。腾讯云仅拉取和运行该镜像。数据库继续由 PostgreSQL 作为权威状态，migration 使用 expand/contract；生产部署以版本/SHA 标签和 digest 为审计依据，以 GitHub Environment 审批、Actions concurrency 和服务器部署锁控制风险。
 
-实施初期先使用手动 `workflow_dispatch`，完成至少一次正常部署、一次 migration 失败演练和一次镜像回滚后，再启用 `main` 自动部署。
+实施初期先使用手动 `workflow_dispatch` 部署已发布的镜像，完成至少一次正常部署、一次 migration 失败演练和一次镜像回滚后，再考虑自动部署。
