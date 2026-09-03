@@ -1,0 +1,17 @@
+# Production overlay: pull an already-built GHCR image. Do not combine this file
+# with compose.override.yaml, or the server will try to build again.
+# Usage:
+#   docker compose --env-file .env --env-file .deploy/image.env \
+#     -f compose.yaml -f compose.production.yaml --profile worker pull
+services:
+  web:
+    image: ${SMART_CHAT_IMAGE:-ghcr.io/saxon-y/smart-chat}:${SMART_CHAT_IMAGE_TAG:?SMART_CHAT_IMAGE_TAG must be set in .deploy/image.env}
+    pull_policy: always
+
+  worker:
+    image: ${SMART_CHAT_IMAGE:-ghcr.io/saxon-y/smart-chat}:${SMART_CHAT_IMAGE_TAG:?SMART_CHAT_IMAGE_TAG must be set in .deploy/image.env}
+    pull_policy: always
+
+  runtime-worker:
+    image: ${SMART_CHAT_IMAGE:-ghcr.io/saxon-y/smart-chat}:${SMART_CHAT_IMAGE_TAG:?SMART_CHAT_IMAGE_TAG must be set in .deploy/image.env}
+    pull_policy: always

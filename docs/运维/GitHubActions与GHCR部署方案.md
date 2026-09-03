@@ -2,11 +2,13 @@
 
 ## 1. 文档状态
 
-- 状态：设计方案，尚未实施
+- 状态：仓库侧已落地（阶段 A–D），人工配置尚未完成
 - 目标环境：腾讯云 CVM、Docker Compose
 - 镜像仓库：GitHub Container Registry（GHCR）
 - 发布分支：`main`
-- 本文不修改现有 GitHub Actions、Compose、Dockerfile 或部署脚本
+- 对应实现：`.github/workflows/`、`compose.production.yaml`、`scripts/deploy-image.sh`
+- 你需要配合的操作步骤见 [GHCR 部署实施清单](GHCR部署实施清单.md)
+- 自动部署（阶段 E）尚未开启，生产发布只允许手动 `workflow_dispatch`
 
 ## 2. 目标
 
@@ -266,28 +268,9 @@ printf '%s' "$GHCR_READ_TOKEN" | docker login ghcr.io -u <github-user> --passwor
 
 ## 9. Compose 目标改造
 
-实施阶段需要将当前固定本地镜像：
+实施阶段需要将当前固定本地镜像改为可配置远程镜像。本地继续通过 `compose.override.yaml` 构建 `smart-chat`；生产通过 `compose.production.yaml` 指定 GHCR，且生产命令必须显式传 `-f`，避免加载本地 override。
 
-```yaml
-image: smart-chat:${SMART_CHAT_IMAGE_TAG:-latest}
-build:
-  context: .
-```
-
-改为可配置远程镜像：
-
-```yaml
-image: ${SMART_CHAT_IMAGE:-ghcr.io/saxon-y/smart-chat}:${SMART_CHAT_IMAGE_TAG}
-```
-
-生产服务器不保留 `build`，或者使用独立的生产覆盖文件：
-
-```text
-compose.yaml
-compose.production.yaml
-```
-
-推荐保留基础 Compose 的本地开发能力，通过生产覆盖文件移除 `build` 并指定 GHCR 镜像：
+推荐保留基础 Compose 的本地开发能力。本地 `docker compose` 会自动加载 `compose.override.yaml` 以保留 `build`；生产命令显式传入文件列表，因此不会加载 override，也就不会在服务器上构建：
 
 ```bash
 docker compose -f compose.yaml -f compose.production.yaml pull
@@ -447,36 +430,38 @@ Caddy 和 PostgreSQL 通常不随应用回滚。
 
 ### 阶段 A：CI 门禁
 
-- 新增 `ci.yml`。
-- 启用 `main` 分支保护。
-- 验证测试数据库 migration、lint、typecheck、test、build。
+- [x] 新增 `ci.yml`。
+- [ ] 启用 `main` 分支保护（需仓库管理员在 GitHub 设置）。
+- [x] 验证测试数据库 migration、lint、typecheck、test、build。
 
 ### 阶段 B：GHCR 镜像发布
 
-- 新增 `publish-image.yml`。
-- 修改 Dockerfile 以提高缓存和最小化运行镜像。
-- 发布 SHA 标签、`main` 标签、digest、SBOM。
-- 在非生产机器验证 `docker pull` 和启动。
+- [x] 新增 `publish-image.yml`。
+- [x] 修改 Dockerfile 以提高缓存和最小化运行镜像。
+- [ ] 发布 SHA 标签、`main` 标签、digest、SBOM（需 `main` CI 成功后由 Actions 执行）。
+- [ ] 在非生产机器验证 `docker pull` 和启动。
 
 ### 阶段 C：生产 Compose 远程镜像化
 
-- 新增 `compose.production.yaml`。
-- 新增 `.deploy/image.env` 约定。
-- 新增 `deploy-image.sh`，不再在服务器执行 build。
-- 保留现有 `redeploy.sh` 作为过渡/应急方案。
+- [x] 新增 `compose.production.yaml`。
+- [x] 新增 `.deploy/image.env` 约定。
+- [x] 新增 `deploy-image.sh`，不再在服务器执行 build。
+- [x] 保留现有 `redeploy.sh` 作为过渡/应急方案。
 
 ### 阶段 D：GitHub Actions 生产部署
 
-- 创建 `production` Environment 和审批规则。
-- 配置 SSH Secrets 和固定 Host Key。
-- 新增 `deploy-production.yml`。
-- 先仅允许手动 `workflow_dispatch`。
+- [ ] 创建 `production` Environment 和审批规则。
+- [ ] 配置 SSH Secrets 和固定 Host Key。
+- [x] 新增 `deploy-production.yml`。
+- [x] 先仅允许手动 `workflow_dispatch`。
 
 ### 阶段 E：自动部署与演练
 
-- 开启 `main` CI 成功后的自动部署。
-- 演练重复消息、并发部署、GHCR 不可用、migration 失败和镜像回滚。
-- 验证备份恢复和旧镜像保留策略。
+- [ ] 开启 `main` CI 成功后的自动部署。
+- [ ] 演练重复消息、并发部署、GHCR 不可用、migration 失败和镜像回滚。
+- [ ] 验证备份恢复和旧镜像保留策略。
+
+人工操作顺序见 [GHCR 部署实施清单](GHCR部署实施清单.md)。
 
 ## 18. 验收清单
 

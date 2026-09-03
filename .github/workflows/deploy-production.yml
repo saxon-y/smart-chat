@@ -1,0 +1,86 @@
+name: Deploy production
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Immutable image tag already published to GHCR, e.g. sha-a1b2c3d4e5f6
+        required: true
+        type: string
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    name: ssh-and-rollout
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate tag
+        id: tag
+        run: |
+          tag="${{ inputs.image_tag }}"
+          case "$tag" in
+            sha-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+            v[0-9]*) ;;
+            *)
+              echo "Refusing tag '$tag'. Use sha-<git-sha> or v1.2.0."
+              exit 1
+              ;;
+          esac
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "git_ref=${tag#sha-}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify commit is on main
+        run: |
+          git fetch origin main --tags
+          resolved="$(git rev-parse --verify "${{ steps.tag.outputs.git_ref }}^{commit}")"
+          git merge-base --is-ancestor "$resolved" origin/main
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify image exists
+        run: docker buildx imagetools inspect "ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.image_tag }}"
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_deploy
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}" > ~/.ssh/id_deploy
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_HOST_KEY }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy over SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          IMAGE_TAG: ${{ steps.tag.outputs.image_tag }}
+          DEPLOY_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          deploy_path="${DEPLOY_PATH:-/opt/smart-chat}"
+          ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes -o BatchMode=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "cd '${deploy_path}' && DEPLOY_RUN_URL='${DEPLOY_RUN_URL}' ./scripts/deploy-image.sh '${IMAGE_TAG}'"
+
+      - name: Public HTTPS smoke
+        if: ${{ vars.PUBLIC_HOST != '' }}
+        run: curl --fail --silent --show-error --head "https://${{ vars.PUBLIC_HOST }}"
