@@ -1,3 +1,5 @@
+# Local `docker compose` also loads compose.override.yaml (adds build).
+# Production must pass `-f compose.yaml -f compose.production.yaml` so it pulls GHCR instead of building.
 services:
   postgres:
     image: postgres:16-alpine
@@ -17,10 +19,7 @@ services:
       retries: 10
 
   web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: smart-chat:${SMART_CHAT_IMAGE_TAG:-latest}
+    image: ${SMART_CHAT_IMAGE:-smart-chat}:${SMART_CHAT_IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: .env
     environment:
@@ -55,10 +54,7 @@ services:
 
   worker:
     profiles: [worker]
-    image: smart-chat:${SMART_CHAT_IMAGE_TAG:-latest}
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ${SMART_CHAT_IMAGE:-smart-chat}:${SMART_CHAT_IMAGE_TAG:-latest}
     working_dir: /app
     command: ["npm", "run", "worker"]
     env_file: .env
@@ -76,10 +72,7 @@ services:
 
   runtime-worker:
     profiles: [self-hosted-runtime]
-    image: smart-chat:${SMART_CHAT_IMAGE_TAG:-latest}
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ${SMART_CHAT_IMAGE:-smart-chat}:${SMART_CHAT_IMAGE_TAG:-latest}
     working_dir: /app
     command: ["npm", "run", "runtime:worker"]
     env_file: .env

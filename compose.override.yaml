@@ -1,0 +1,17 @@
+# Local-only overlay. `docker compose` loads this file automatically.
+# Production commands pass `-f compose.yaml -f compose.production.yaml` and therefore skip it.
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+  runtime-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile

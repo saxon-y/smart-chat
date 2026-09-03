@@ -43,6 +43,10 @@ done
 
 docker compose config --quiet
 
+if [[ -f .deploy/image.env ]] && [[ "${ALLOW_LOCAL_BUILD_REDEPLOY:-0}" != "1" ]]; then
+  fail "this server pulls GHCR images (.deploy/image.env exists); use ./scripts/deploy-image.sh <sha-tag> or set ALLOW_LOCAL_BUILD_REDEPLOY=1"
+fi
+
 if [[ "${DEPLOY_ALLOW_DIRTY:-0}" != "1" ]] && [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   fail "tracked files contain local changes; commit/stash them or set DEPLOY_ALLOW_DIRTY=1"
 fi

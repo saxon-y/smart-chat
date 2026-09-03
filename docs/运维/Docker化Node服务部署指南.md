@@ -26,6 +26,8 @@ worker 容器
 - 根Docker 镜像定义：仓库根目录 `Dockerfile`。
 - 构建排除清单：仓库根目录 `.dockerignore`。
 - 服务编排：仓库根目录 `compose.yaml`。
+- 本地构建覆盖：`compose.override.yaml`（`docker compose` 默认加载）。
+- 生产镜像覆盖：`compose.production.yaml`（必须显式 `-f`，不会自动加载）。
 
 镜像基于 Node.js 22，构建与运行分阶段进行。镜像内包含构建后的 Next.js、Prisma Client、Worker 脚本及 Runtime 代码；运行容器使用非 root 的 `node` 用户。
 
@@ -85,13 +87,19 @@ docker compose config
 make deploy
 ```
 
-已经上线后的自动重新部署使用：
+已经上线后的自动重新部署，目标路径改为拉取 GHCR 镜像：
+
+```bash
+make deploy-image TAG=sha-a1b2c3d4e5f6
+```
+
+应急本地构建仍可使用：
 
 ```bash
 make redeploy
 ```
 
-该命令调用 `scripts/redeploy.sh`，依次执行：部署锁、环境检查、脏工作区保护、`git pull --ff-only`、数据库备份、镜像构建、Prisma migration、Web/Worker 容器重建和本地 HTTP 健康检查。任何步骤失败都会以非零状态退出并输出对应阶段；构建和 migration 完成前不会替换当前 Web 容器。
+`make redeploy` 调用 `scripts/redeploy.sh`，依次执行：部署锁、环境检查、脏工作区保护、`git pull --ff-only`、数据库备份、镜像构建、Prisma migration、Web/Worker 容器重建和本地 HTTP 健康检查。任何步骤失败都会以非零状态退出并输出对应阶段；构建和 migration 完成前不会替换当前 Web 容器。切到 GHCR 后该命令会被 `.deploy/image.env` 拦截。
 
 可选参数：
 

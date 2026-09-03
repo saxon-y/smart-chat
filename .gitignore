@@ -20,6 +20,10 @@
 # production
 /build
 /backups/
+.deploy/image.env
+.deploy/previous.env
+.deploy/releases/
+.deploy/*.tmp
 
 # misc
 .DS_Store
