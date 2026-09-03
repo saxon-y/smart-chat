@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const registerSchema = z.object({
   email: z.string().trim().email().max(320),
+  code: z.string().trim().regex(/^\d{6}$/),
   password: z.string().min(8).max(128),
   displayName: z.string().trim().min(1).max(80),
 });

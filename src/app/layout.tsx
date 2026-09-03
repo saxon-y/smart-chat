@@ -26,7 +26,7 @@ const themeInit = `(function(){try{var c=localStorage.getItem('smartchat_theme')
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="zh-CN" className={`${manrope.variable} ${mono.variable}`}>
+    <html lang="zh-CN" className={`${manrope.variable} ${mono.variable}`} suppressHydrationWarning>
       <body>
         <Script id="theme-init" strategy="beforeInteractive" dangerouslySetInnerHTML={{ __html: themeInit }} />
         {children}
