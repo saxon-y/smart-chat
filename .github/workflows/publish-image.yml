@@ -106,13 +106,14 @@ jobs:
           sbom: true
 
       - name: Scan image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ghcr.io/${{ github.repository }}:${{ steps.refs.outputs.sha_tag }}
           format: table
           exit-code: "0"
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          version: v0.70.0
 
       - name: Summary
         run: |
