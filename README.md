@@ -29,6 +29,34 @@ npm run dev
 
 请在首次启动前替换 `.env` 中的 session、AI 配置加密密钥和种子密码。
 
+## 认证与邮箱验证码
+
+密码注册需要先发送并填写 6 位邮箱验证码。开发环境默认使用 `EMAIL_PROVIDER=console`，验证码会输出到运行 `npm run dev` 的终端，不会真正发送邮件。正式发信可选择：
+
+- `EMAIL_PROVIDER=smtp`：配置 `SMTP_HOST`、`SMTP_PORT`、`SMTP_USER`、`SMTP_PASSWORD` 和 `EMAIL_FROM`。
+- `EMAIL_PROVIDER=resend`：配置 `RESEND_API_KEY` 和已验证域名下的 `EMAIL_FROM`。
+
+第三方登录支持 Google 和 Microsoft，配置对应 Client ID/Secret 后，登录和注册页面会自动显示按钮：
+
+```text
+GOOGLE_CLIENT_ID="..."
+GOOGLE_CLIENT_SECRET="..."
+MICROSOFT_CLIENT_ID="..."
+MICROSOFT_CLIENT_SECRET="..."
+MICROSOFT_TENANT="consumers"
+```
+
+本地 OAuth 回调地址：
+
+```text
+http://localhost:3000/api/auth/oauth/google/callback
+http://localhost:3000/api/auth/oauth/microsoft/callback
+```
+
+生产环境必须配置 HTTPS `APP_ORIGIN`、独立的 `OAUTH_STATE_SECRET` 和 `EMAIL_CODE_SECRET`。第三方登录仅申请 `openid email profile`，不读取用户邮箱内容。
+
+如果本机浏览器通过代理访问 Google/Microsoft，但 Node.js 后端无法直连，可单独配置 OAuth 代理，例如 `OAUTH_HTTP_PROXY="http://127.0.0.1:7897"`。代理会接触 OAuth 网络流量，只应使用自己信任的本机代理。
+
 ## 本地 AI 服务
 
 管理员登录后访问 `/admin`，配置 OpenAI-compatible 服务地址、模型和 API Key。默认种子配置指向 `http://localhost:4000/v1`。当消息结构化提及“大聪明”时，服务端只读取当前房间最近 30 条消息并调用：
