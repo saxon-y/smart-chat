@@ -23,16 +23,21 @@ import {
   Copy,
   MessageSquareReply,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { mergeMessage } from "@/lib/chat/message-list";
 import AgentRunTimeline from "./AgentRunTimeline";
+import ApprovalCard from "./ApprovalCard";
+import AgentHandoffSummary from "./AgentHandoffSummary";
+import AgentResultCompare from "./AgentResultCompare";
 import ThreadPanel from "./ThreadPanel";
 import SearchPanel from "./SearchPanel";
 import NotificationPanel from "./NotificationPanel";
+import MarkerPanel from "./MarkerPanel";
+import { ControlledFileUpload, type UploadedArtifact } from "./ControlledFileUpload";
 import { useRoomPresence } from "@/lib/chat/use-room-presence";
 import { WECHAT_EMOJI, getWechatEmoji } from "@/lib/wechat-emoji";
 import {
@@ -176,6 +181,8 @@ export default function ChatWorkspace() {
   const [thinking, setThinking] = useState(false);
   const [thinkingAgent, setThinkingAgent] = useState("");
   const [runStatuses, setRunStatuses] = useState<Record<string, { runId: string; agentKey?: string; agentName?: string; mode?: string; status?: string; progress?: number; error?: string }>>({});
+  const [runApprovals, setRunApprovals] = useState<Record<string, Array<{ id: string; status: string; toolId?: string; risk?: string; toolLabel?: string; riskLabel?: string; targetLabel?: string }>>>({});
+  const [runHandoffs, setRunHandoffs] = useState<Record<string, { sources: Array<{ runId: string; agentName: string; modelName?: string | null; status: string }>; status: string }>>({});
   const [aiError, setAiError] = useState("");
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [profileMember, setProfileMember] = useState<Member | null>(null);
@@ -187,12 +194,15 @@ export default function ChatWorkspace() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const mentionMenuRef = useRef<HTMLDivElement>(null);
   const thinkingTimerRef = useRef<number | null>(null);
-  const pendingMessagesRef = useRef<Record<string, { body: string; attachments: Attachment[]; mentions: Array<{ memberId: string; start: number; end: number }>; replyToId?: string }>>({});
+  const pendingMessagesRef = useRef<Record<string, { body: string; attachments: Attachment[]; artifactAttachments?: Array<{ type: "artifact"; artifactId: string; name?: string }>; mentions: Array<{ memberId: string; start: number; end: number }>; replyToId?: string }>>({});
   const [messageMenu, setMessageMenu] = useState<string | null>(null);
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [threadRoot, setThreadRoot] = useState<Message | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [uploadedArtifact, setUploadedArtifact] = useState<UploadedArtifact | null>(null);
+  const [markerOpen, setMarkerOpen] = useState(false);
+  const draftStorageRef = useRef<Record<string, string>>({});
 
   const updateRunStatus = useCallback((run: { runId?: string; id?: string; agentKey?: string; agentName?: string; mode?: string; status?: string; progress?: number; error?: string }) => {
     const runId = run.runId ?? run.id;
@@ -324,11 +334,16 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
     return () => window.removeEventListener("pointerdown", handler);
   }, [requestNotifyPermission]);
   useEffect(() => {
-    api<Room[] | { rooms?: Room[]; data?: Room[] }>("/api/rooms")
-      .then((response) => {
-        const next = unwrap(response) as Room[];
+    Promise.all([
+      api<Room[] | { rooms?: Room[]; data?: Room[] }>("/api/rooms"),
+      api<{ rooms: Room[] }>("/api/rooms/navigation").catch(() => ({ rooms: [] })),
+    ])
+      .then(([response, navigation]) => {
+        const preferences = new Map(navigation.rooms.map((room) => [room.id, room]));
+        const next = (unwrap(response) as Room[]).map((room) => ({ ...room, ...preferences.get(room.id) }));
         if (Array.isArray(next) && next.length) {
           setRooms(next);
+          setPinnedRooms(new Set(next.filter((room) => room.favorite).map((room) => room.id)));
           void api(`/api/rooms/${next[0].id}/members`, { method: "POST" })
             .then(() => setActiveRoom(next[0]))
             .catch(() => setActiveRoom(next[0]));
@@ -431,10 +446,35 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
   }, [activeRoom, notifyNewMessage, updateRunStatus, upsertMessage]);
 
   useEffect(() => {
+    let frame = 0;
+    try {
+      const saved = sessionStorage.getItem(`smart-chat:draft:${activeRoom.id}`) ?? "";
+      draftStorageRef.current[activeRoom.id] = saved;
+      frame = window.requestAnimationFrame(() => setDraft(saved));
+    } catch { frame = window.requestAnimationFrame(() => setDraft("")); }
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeRoom.id]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(`smart-chat:draft:${activeRoom.id}`, draft);
+    } catch { /* storage may be unavailable */ }
+    const textarea = textareaRef.current;
+    if (textarea) { textarea.style.height = "auto"; textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`; }
+  }, [draft, activeRoom.id]);
+
+  useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [messages, thinking]);
+  useEffect(() => {
+    const waiting = Object.values(runStatuses).filter((run) => run.status?.toLowerCase() === "waiting_approval");
+    for (const run of waiting) void api<{ approvals: Array<{ id: string; status: string; toolId?: string; risk?: string; toolLabel?: string; riskLabel?: string; targetLabel?: string }> }>(`/api/rooms/${activeRoom.id}/runs/${run.runId}/approvals`).then((data) => setRunApprovals((current) => ({ ...current, [run.runId]: data.approvals }))).catch(() => undefined);
+  }, [activeRoom.id, runStatuses]);
+  useEffect(() => {
+    for (const run of Object.values(runStatuses).filter((item) => item.mode !== "DIRECT").slice(-10)) void api<{ status: string; sources: Array<{ runId: string; agentName: string; modelName?: string | null; status: string }> }>(`/api/rooms/${activeRoom.id}/runs/${run.runId}/handoff`).then((data) => { if (data.sources.length) setRunHandoffs((current) => ({ ...current, [run.runId]: data })); }).catch(() => undefined);
+  }, [activeRoom.id, runStatuses]);
 
   useEffect(() => {
     if (document.hidden || !activeRoom?.id) return;
@@ -452,9 +492,11 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
           room.name.toLowerCase().includes(roomFilter.toLowerCase()),
         )
         .sort((a, b) => {
+          const groupOrder = (a.groupName ?? "默认").localeCompare(b.groupName ?? "默认", "zh-CN");
+          if (groupOrder) return groupOrder;
           const ap = pinnedRooms.has(a.id) ? 1 : 0;
           const bp = pinnedRooms.has(b.id) ? 1 : 0;
-          return bp - ap;
+          return bp - ap || (a.position ?? 0) - (b.position ?? 0) || a.name.localeCompare(b.name, "zh-CN");
         }),
     [rooms, roomFilter, pinnedRooms],
   );
@@ -628,7 +670,7 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
     setMentionOpen(false);
     textareaRef.current?.focus();
   }
-  async function sendMessage(clientId: string, optimistic: Message, payload: { body: string; attachments: Attachment[]; mentions: Array<{ memberId: string; start: number; end: number }>; replyToId?: string }) {
+  async function sendMessage(clientId: string, optimistic: Message, payload: { body: string; attachments: Attachment[]; artifactAttachments?: Array<{ type: "artifact"; artifactId: string; name?: string }>; mentions: Array<{ memberId: string; start: number; end: number }>; replyToId?: string }) {
     setMessages((current) => mergeMessage(current, { ...optimistic, status: "sending" }));
     try {
       const response = await api<{
@@ -639,7 +681,7 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
         duplicate?: boolean;
       }>(`/api/rooms/${activeRoom.id}/messages`, {
         method: "POST",
-        body: JSON.stringify({ body: payload.body, clientId, replyToId: payload.replyToId, attachments: payload.attachments.map((a) => ({ type: "image", dataUrl: a.dataUrl, name: a.name })), mentions: payload.mentions }),
+        body: JSON.stringify({ body: payload.body, clientId, replyToId: payload.replyToId, attachments: payload.attachments.map((a) => ({ type: "image", dataUrl: a.dataUrl, name: a.name })), artifactAttachments: payload.artifactAttachments, mentions: payload.mentions }),
       });
       delete pendingMessagesRef.current[clientId];
       if (response.message) upsertMessage(response.message);
@@ -669,7 +711,7 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
     requestNotifyPermission();
     const body = draft.trim();
     if (loading) return;
-    if (!body && attachments.length === 0) return;
+    if (!body && attachments.length === 0 && !uploadedArtifact) return;
     const clientId = uuid();
     const optimistic: Message = {
       id: `local-${clientId}`,
@@ -685,13 +727,14 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
     const mentions = members
       .filter((member) => body.includes(`@${member.displayName}`))
       .map((member) => { const start = body.indexOf(`@${member.displayName}`); return { memberId: member.id, start, end: start + member.displayName.length + 1 }; });
-    const payload = { body, attachments: [...attachments], mentions, replyToId: replyingTo?.id };
+    const payload = { body, attachments: [...attachments], artifactAttachments: uploadedArtifact ? [{ type: "artifact" as const, artifactId: uploadedArtifact.id, name: uploadedArtifact.name }] : [], mentions, replyToId: replyingTo?.id };
     pendingMessagesRef.current[clientId] = payload;
     setMessages((current) => [...current, optimistic]);
     setDraft("");
     setMentionOpen(false);
     setReplyingTo(null);
     setAttachments([]);
+    setUploadedArtifact(null);
     await sendMessage(clientId, optimistic, payload);
   }
 
@@ -955,13 +998,16 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
             <button type="button" className="room-join-inline" aria-label="申请加入聊天室" title="申请加入聊天室" onClick={() => setJoinOpen(true)}><Plus size={15} /></button>
           </div>
           <div className="room-list" aria-label="房间">
-            {filteredRooms.map((room) => {
+            {filteredRooms.map((room, index) => {
               const isPinned = pinnedRooms.has(room.id);
               const isMuted = mutedRooms.has(room.id);
               const unread = unreadByRoom[room.id] ?? 0;
+              const groupName = room.groupName ?? "默认";
+              const showGroup = index === 0 || (filteredRooms[index - 1].groupName ?? "默认") !== groupName;
               return (
+                <Fragment key={room.id}>
+                {showGroup && <div className="room-group-label">{groupName}</div>}
                 <div
-                  key={room.id}
                   className={`room-item${activeRoom.id === room.id ? " active" : ""}`}
                 >
                   <button
@@ -1012,6 +1058,8 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
                               else next.add(room.id);
                               return next;
                             });
+                            setRooms((current) => current.map((item) => item.id === room.id ? { ...item, favorite: !isPinned } : item));
+                            void api(`/api/rooms/${room.id}/preference`, { method: "PATCH", body: JSON.stringify({ favorite: !isPinned }) }).catch((error) => setNotice(error instanceof Error ? error.message : "无法更新收藏"));
                           }}
                         >
                           <Pin size={14} />
@@ -1036,6 +1084,7 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
                     </PopoverContent>
                   </Popover>
                 </div>
+                </Fragment>
               );
             })}
           </div>
@@ -1089,13 +1138,14 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
                 </p>
               </div>
               <div className="header-spacer" />
-              <button type="button" className="icon-button" aria-label="搜索当前房间消息" title="搜索消息" onClick={() => { setThreadRoot(null); setSearchOpen(true); }}><Search size={16} /></button>
+              <button type="button" className="icon-button" aria-label="搜索当前房间消息" title="搜索消息" onClick={() => { setThreadRoot(null); setMarkerOpen(false); setSearchOpen(true); }}><Search size={16} /></button>
+              <button type="button" className="icon-button" aria-label="查看标记消息" title="标记消息" onClick={() => { setThreadRoot(null); setSearchOpen(false); setMarkerOpen(true); }}><Pin size={16} /></button>
             </header>
             <div className="message-scroll" aria-live="polite" ref={scrollRef}>
               <div className="day-rule">{todayLabel()}</div>
               <div className="messages">
                 {messageList}
-                {Object.values(runStatuses).filter((run) => !["succeeded", "success", "done", "no_action"].includes((run.status ?? "").toLowerCase())).map((run) => (
+                {Object.values(runStatuses).filter((run) => !["succeeded", "success", "done", "no_action"].includes((run.status ?? "").toLowerCase()) || Boolean(runHandoffs[run.runId])).slice(-10).map((run) => (
                   <article className="message assistant thinking" key={`run-${run.runId}`}>
                     <Avatar name={run.agentName || "AI 助手"} assistant />
                     <div className="message-content">
@@ -1104,6 +1154,8 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
                         {run.mode && <span className="message-time">{run.mode === "DIRECT" ? "直达" : "自动调度"}</span>}
                       </div>
                       <AgentRunTimeline status={run.status} errorCode={run.error} agentName={run.agentName} onRetry={() => void actOnRun(run.runId, "retry")} onCancel={() => void actOnRun(run.runId, "cancel")} />
+                      {runApprovals[run.runId]?.filter((approval) => approval.status === "PENDING").map((approval) => <ApprovalCard key={approval.id} {...approval} approvalId={approval.id} roomId={activeRoom.id} runId={run.runId} onDecided={() => setRunApprovals((current) => ({ ...current, [run.runId]: current[run.runId]?.map((item) => item.id === approval.id ? { ...item, status: "APPROVED" } : item) }))} />)}
+                      {runHandoffs[run.runId] && <><AgentHandoffSummary sources={runHandoffs[run.runId].sources.map((source) => ({ id: source.runId, agentName: source.agentName, status: source.status }))} partial={runHandoffs[run.runId].sources.some((source) => source.status !== "SUCCEEDED")} /><AgentResultCompare results={runHandoffs[run.runId].sources.map((source) => ({ id: source.runId, agentName: source.agentName, modelName: source.modelName, status: source.status }))} onAdopt={(resultRunId) => void api(`/api/rooms/${activeRoom.id}/runs/${run.runId}/adoption`, { method: "POST", body: JSON.stringify({ resultRunId }) })} /></>}
                     </div>
                   </article>
                 ))}
@@ -1169,6 +1221,7 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
                     ))}
                   </div>
                 )}
+                {uploadedArtifact && <div className="composer-uploaded-artifact"><a href={uploadedArtifact.url} target="_blank" rel="noreferrer">{uploadedArtifact.name}</a><button type="button" className="icon-button" aria-label="移除上传文件" onClick={() => setUploadedArtifact(null)}><X size={12} /></button></div>}
                 <div className="composer-footer">
                   <div className="composer-tools">
                     <Popover>
@@ -1206,6 +1259,7 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
                         }}
                       />
                     </label>
+                    <ControlledFileUpload roomId={activeRoom.id} onUploaded={(artifact) => { setUploadedArtifact(artifact); setNotice(`已上传 ${artifact.name}`); }} />
                   </div>
                   <span className="composer-hint" aria-hidden="true" />
                   <button
@@ -1224,7 +1278,7 @@ type SupervisorConfig = { id?: string; agentId?: string; enabled?: boolean; conf
               )}
             </div>
           </section>
-          {threadRoot ? <ThreadPanel roomId={activeRoom.id} rootMessage={threadRoot} open onClose={() => setThreadRoot(null)} currentMemberId={myMemberId} currentMemberName={user?.displayName} /> : searchOpen ? <SearchPanel roomId={activeRoom.id} open onClose={() => setSearchOpen(false)} onSelectMessage={(message) => { setSearchOpen(false); jumpToMessage(message.id); }} /> : <aside className="context-panel">
+          {threadRoot ? <ThreadPanel roomId={activeRoom.id} rootMessage={threadRoot} open onClose={() => setThreadRoot(null)} currentMemberId={myMemberId} currentMemberName={user?.displayName} /> : searchOpen ? <SearchPanel roomId={activeRoom.id} open onClose={() => setSearchOpen(false)} onSelectMessage={(message) => { setSearchOpen(false); jumpToMessage(message.id); }} /> : markerOpen ? <MarkerPanel roomId={activeRoom.id} open onClose={() => setMarkerOpen(false)} onSelectMessage={(message) => { setMarkerOpen(false); jumpToMessage(message.id); }} /> : <aside className="context-panel">
             <div className="context-title">
               <h2>房间详情</h2>
               <button type="button" className="icon-button" aria-label="聊天室设置" title="聊天室设置" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /></button>

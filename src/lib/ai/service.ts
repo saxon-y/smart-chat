@@ -46,7 +46,12 @@ async function storeGeneratedImage(bytes: Buffer) {
   return { ...stored, mimeType };
 }
 
-async function recentContext(roomId: string) {
+async function recentContext(roomId: string, threadId?: string | null) {
+  if (threadId) {
+    const thread = await db.thread.findFirst({ where: { id: threadId, roomId }, include: { rootMessage: { include: { senderMember: { select: { principalType: true, assistantKey: true, user: { select: { displayName: true } } } } } }, replies: { where: { deletedAt: null }, orderBy: { sequence: "asc" }, include: { senderMember: { select: { principalType: true, assistantKey: true, user: { select: { displayName: true } } } } } } } });
+    if (!thread) return [];
+    return [thread.rootMessage, ...thread.replies];
+  }
   const recent = await db.message.findMany({
     where: { roomId, deletedAt: null },
     orderBy: { roomSequence: "desc" },
@@ -58,8 +63,11 @@ async function recentContext(roomId: string) {
 
 async function completeTextRun(run: Awaited<ReturnType<typeof loadRun>>, content: string, tokenUsage?: number) {
   if (!run?.targetMemberId || !run.owner) throw new Error("assistant_member_not_found");
-  const projection = await projectFinalMessage({ runId: run.id, roomId: run.roomId, targetMemberId: run.targetMemberId, membershipVersion: run.membershipVersion, owner: run.owner, leaseGeneration: run.leaseGeneration, triggerMessageId: run.triggerMessageId, updatedAt: run.updatedAt, body: content, tokenUsage });
-  if (projection.created) publishMessage(run.roomId, projection.message.id);
+  const projection = await projectFinalMessage({ runId: run.id, roomId: run.roomId, targetMemberId: run.targetMemberId, membershipVersion: run.membershipVersion, owner: run.owner, leaseGeneration: run.leaseGeneration, triggerMessageId: run.triggerMessageId, threadId: run.threadId, updatedAt: run.updatedAt, body: content, tokenUsage });
+  if (projection.created) {
+    if (run.threadId) (await import("@/lib/chat/events")).publishThreadReply(run.roomId, run.threadId, projection.message.id);
+    else publishMessage(run.roomId, projection.message.id);
+  }
 }
 
 async function completeImageRun(run: Awaited<ReturnType<typeof loadRun>>, bytes: Buffer, revisedPrompt?: string) {
@@ -156,7 +164,7 @@ async function runAgent(run: NonNullable<Awaited<ReturnType<typeof loadRun>>>) {
     const image = await generateImage(providerConfig(agent.model), prompt, imageConfig?.size ?? "1024x1024", geminiAspect);
     await completeImageRun(run, image.bytes, image.revisedPrompt);
   } else {
-    const result = await callChatProvider(providerConfig(agent.model), buildChatContext(await recentContext(run.roomId), agent.systemPrompt || DEFAULT_SYSTEM_PROMPT));
+    const result = await callChatProvider(providerConfig(agent.model), buildChatContext(await recentContext(run.roomId, run.threadId), agent.systemPrompt || DEFAULT_SYSTEM_PROMPT));
     await completeTextRun(run, result.content, result.tokenUsage);
   }
 }

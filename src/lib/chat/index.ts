@@ -2,10 +2,11 @@ import { AiRunMode, PrincipalType, RoomRole } from "@prisma/client";
 import { db } from "@/lib/db";
 import { configuredRuntimeSnapshot } from "@/lib/ai/runtime-mode";
 export { messageBodySchema, validateMessageBody, extractMentionNames } from "./validation";
-import { validateMessageBody, type ImageAttachment } from "./validation";
+import { validateMessageBody, type ImageAttachment, type ArtifactAttachment } from "./validation";
 import { Prisma } from "@prisma/client";
 import { publishAgentEvent, publishMessage } from "./events";
 import { createNotification } from "@/lib/notifications";
+import { roomPermission } from "./rooms";
 
 export const ASSISTANT_KEY = "da-cong-ming";
 export const ASSISTANT_NAME = "大聪明";
@@ -16,7 +17,9 @@ export type MentionInput = { memberId?: string; name?: string; start?: number; e
 
 
 export async function activeMembership(roomId: string, userId: string) {
-  return db.roomMember.findFirst({ where: { roomId, userId, principalType: PrincipalType.USER, leftAt: null } });
+  const member = await db.roomMember.findFirst({ where: { roomId, userId, principalType: PrincipalType.USER, leftAt: null } });
+  if (!member || !await roomPermission(userId, roomId, "canView")) return null;
+  return member;
 }
 
 export async function resolveMentions(roomId: string, mentions: MentionInput[] = [], body?: string) {
@@ -101,17 +104,19 @@ export async function toggleMessageReaction(input: { roomId: string; messageId: 
   return { active: result };
 }
 
-export async function createMessage(input: { roomId: string; memberId: string; body: string; attachments?: ImageAttachment[]; metadata?: { imagePrompt?: { style: string; size: string; aspect: string } }; aiAllowed?: boolean; clientId?: string; mentions?: MentionInput[]; replyToId?: string | null; requestId: string }) {
+export async function createMessage(input: { roomId: string; memberId: string; body: string; attachments?: Array<ImageAttachment | ArtifactAttachment>; metadata?: { imagePrompt?: { style: string; size: string; aspect: string } }; aiAllowed?: boolean; clientId?: string; mentions?: MentionInput[]; replyToId?: string | null; requestId: string }) {
   const checked = validateMessageBody(input.body, Boolean(input.attachments && input.attachments.length > 0));
   if (!checked.ok) throw new Error(checked.message);
   const attachments = input.attachments ?? [];
-  const parts: Array<Record<string, unknown>> = attachments.map((a) => ({ type: "image", dataUrl: a.dataUrl, name: a.name }));
+  const parts: Array<Record<string, unknown>> = attachments.map((a) => a.type === "artifact" ? ({ type: "artifact", artifactId: a.artifactId, name: a.name, url: `/api/artifacts/${a.artifactId}` }) : ({ type: "image", dataUrl: a.dataUrl, name: a.name }));
   if (input.metadata?.imagePrompt) parts.push({ type: "image_prompt_config", ...input.metadata.imagePrompt });
   const contentParts: Prisma.InputJsonValue | undefined = parts.length ? parts as Prisma.InputJsonValue : undefined;
   const mentionData = await resolveMentions(input.roomId, input.mentions ?? [], checked.body);
   const result = await db.$transaction(async (tx) => {
     const member = await tx.roomMember.findFirst({ where: { id: input.memberId, roomId: input.roomId, principalType: PrincipalType.USER, leftAt: null } });
     if (!member) throw new Error("需要先加入该房间");
+    const artifactIds = attachments.filter((a): a is ArtifactAttachment => a.type === "artifact").map((a) => a.artifactId);
+    if (artifactIds.length && await tx.artifact.count({ where: { id: { in: artifactIds }, roomId: input.roomId, deletedAt: null } }) !== artifactIds.length) throw new Error("附件不存在或不属于当前房间");
     if (member.mutedUntil && member.mutedUntil > new Date()) throw new Error("ROOM_MEMBER_MUTED");
     let replyToId: string | null = null;
     if (input.replyToId) {
@@ -129,12 +134,15 @@ export async function createMessage(input: { roomId: string; memberId: string; b
     const room = await tx.room.update({ where: { id: input.roomId }, data: { lastSequence: { increment: 1 } } });
     const message = await tx.message.create({ data: { roomId: input.roomId, senderMemberId: member.id, body: checked.body, contentParts: contentParts ?? undefined, clientId: input.clientId, roomSequence: room.lastSequence, replyToId, mentions: { create: mentionData.map(({ member, start, end }) => ({ memberId: member.id, start, end })) } }, include: { senderMember: { include: { user: true } }, mentions: true, replyTo: { include: { senderMember: { include: { user: true } } } } } });
     const assistantMentions = mentionData.filter(({ member }) => member.principalType === PrincipalType.ASSISTANT && member.assistantKey);
-    if (assistantMentions.length > 1) throw new Error("一次只能调用一个 Agent");
+    const uniqueAssistantMentions = [...new Map(assistantMentions.map((mention) => [mention.member.assistantKey, mention])).values()];
+    if (uniqueAssistantMentions.length > 3) throw new Error("一次最多调用三个 Agent");
     const queueDepth = await tx.aiRun.count({ where: { roomId: input.roomId, status: { in: ["PENDING", "FAILED_RETRYABLE"] } } });
     const canQueueAi = input.aiAllowed !== false && queueDepth < 50;
     let aiRun = null;
-    if (canQueueAi && assistantMentions.length === 1) {
-      const targetMember = assistantMentions[0].member;
+    const aiRuns: Prisma.AiRunGetPayload<{ include: { targetAgent: true } }>[] = [];
+    if (canQueueAi && uniqueAssistantMentions.length > 0) {
+      for (const mention of uniqueAssistantMentions) {
+      const targetMember = mention.member;
       const activeTarget = await tx.roomMember.findFirst({ where: { id: targetMember.id, roomId: input.roomId, leftAt: null, version: targetMember.version } });
       if (!activeTarget) throw new Error("Agent 已不在当前房间");
       const targetAgent = await tx.agent.findUnique({ where: { key: targetMember.assistantKey! } });
@@ -150,10 +158,12 @@ export async function createMessage(input: { roomId: string; memberId: string; b
           targetMemberId: targetMember.id,
           membershipVersion: targetMember.version,
           requestId: input.requestId,
-          idempotencyKey: `message:${message.id}:direct`,
+          idempotencyKey: `message:${message.id}:direct:${targetMember.id}`,
         },
         include: { targetAgent: true },
       });
+      aiRuns.push(aiRun);
+      }
     } else if (canQueueAi) {
       const supervisor = await tx.roomSupervisor.findUnique({ where: { roomId: input.roomId }, include: { agent: true } });
       if (supervisor?.enabled && supervisor.agent.enabled) {
@@ -172,24 +182,24 @@ export async function createMessage(input: { roomId: string; memberId: string; b
         });
       }
     }
-    if (aiRun) {
+    for (const queuedRun of aiRuns.length ? aiRuns : aiRun ? [aiRun] : []) {
       await tx.outboxEvent.create({
         data: {
           roomId: input.roomId,
-          runId: aiRun.id,
+          runId: queuedRun.id,
           messageId: message.id,
           type: "agent_queued",
           payload: {
-            runId: aiRun.id,
-            agentKey: aiRun.targetAgent?.key ?? "room-supervisor",
-            agentName: aiRun.targetAgent?.name ?? "房间总管",
-            mode: aiRun.mode,
+            runId: queuedRun.id,
+            agentKey: queuedRun.targetAgent?.key ?? "room-supervisor",
+            agentName: queuedRun.targetAgent?.name ?? "房间总管",
+            mode: queuedRun.mode,
             status: "queued",
           },
         },
       });
     }
-    return { message, aiRun, duplicate: false };
+    return { message, aiRun: aiRuns[0] ?? aiRun, aiRuns, duplicate: false };
   });
   if (!result.duplicate) publishMessage(input.roomId, result.message.id);
   if (!result.duplicate && result.message.mentions?.length) {
@@ -207,6 +217,7 @@ export async function createMessage(input: { roomId: string; memberId: string; b
       status: "queued",
     });
   }
+  for (const run of result.aiRuns?.slice(1) ?? []) publishAgentEvent({ type: "agent_queued", roomId: input.roomId, runId: run.id, agentKey: run.targetAgent?.key ?? "room-supervisor", agentName: run.targetAgent?.name ?? "房间总管", mode: run.mode, status: "queued" });
   return result;
 }
 

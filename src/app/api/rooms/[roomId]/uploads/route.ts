@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { getCurrentUser } from "@/lib/auth/session";
 import { activeMembership } from "@/lib/chat";
+import { roomPermission } from "@/lib/chat/rooms";
 import { createArtifactStorage } from "@/lib/ai/artifact-storage";
 import { db } from "@/lib/db";
 import { errorResponse, json } from "@/lib/http";
@@ -16,6 +17,7 @@ export async function POST(request: Request, context: { params: Promise<{ roomId
   if (!user) return errorResponse("需要先登录", 401, "UNAUTHENTICATED");
   const member = await activeMembership(roomId, user.id);
   if (!member) return errorResponse("需要先加入该房间", 403, "FORBIDDEN");
+  if (!await roomPermission(user.id, roomId, "canArtifacts")) return errorResponse("无权上传文件", 403, "FORBIDDEN");
   const form = await request.formData().catch(() => null);
   const file = form?.get("file");
   if (!(file instanceof File)) return errorResponse("文件必填", 400, "VALIDATION_ERROR");
