@@ -3,6 +3,7 @@ import { activeMembership } from "@/lib/chat";
 import { searchMessages } from "@/lib/chat/search";
 import { errorResponse, json } from "@/lib/http";
 import { MessageKind } from "@prisma/client";
+import { roomPermission } from "@/lib/chat/rooms";
 export const runtime = "nodejs";
 
 export async function GET(request: Request, context: { params: Promise<{ roomId: string }> }) {
@@ -10,6 +11,7 @@ export async function GET(request: Request, context: { params: Promise<{ roomId:
   const user = await getCurrentUser();
   if (!user) return errorResponse("需要先登录", 401, "UNAUTHENTICATED");
   if (!(await activeMembership(roomId, user.id))) return errorResponse("需要先加入该房间", 403, "FORBIDDEN");
+  if (!(await roomPermission(user.id, roomId, "canView"))) return errorResponse("无权查看该房间", 403, "FORBIDDEN");
   const url = new URL(request.url); const p = url.searchParams;
   const page = Number(p.get("page") ?? 1); const limit = Number(p.get("limit") ?? 30);
   const kind = p.get("type") ?? p.get("kind");

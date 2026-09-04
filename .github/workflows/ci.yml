@@ -72,5 +72,11 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Security gate
+        run: npm run security:gate
+
+      - name: Capacity gate
+        run: npm run runtime:capacity
+
       - name: Production build
         run: npm run build

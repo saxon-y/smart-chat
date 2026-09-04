@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LoaderCircle, Send, X } from "lucide-react";
 import { api, formatTime, initials, Message, uuid } from "./api";
+import ThreadConclusionPanel from "./ThreadConclusionPanel";
 
 export type ThreadPanelProps = {
   roomId: string;
@@ -143,6 +144,7 @@ export default function ThreadPanel({
         <textarea ref={inputRef} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitReply(); } }} placeholder={`回复 ${rootMessage.senderName ?? currentMemberName}…`} rows={2} disabled={sending} />
         <button type="button" className="send-button" onClick={() => void submitReply()} disabled={!draft.trim() || sending} aria-label="发送回复"><Send size={14} /> 回复</button>
       </div>
+      <ThreadConclusionPanel roomId={roomId} threadId={rootMessage.id} />
     </aside>
   );
 }

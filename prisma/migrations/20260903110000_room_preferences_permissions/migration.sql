@@ -1,0 +1,10 @@
+CREATE TABLE "RoomPreference" ("id" TEXT NOT NULL, "userId" TEXT NOT NULL, "roomId" TEXT NOT NULL, "groupName" TEXT NOT NULL DEFAULT '默认', "position" INTEGER NOT NULL DEFAULT 0, "favorite" BOOLEAN NOT NULL DEFAULT false, "collapsed" BOOLEAN NOT NULL DEFAULT false, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP(3) NOT NULL, CONSTRAINT "RoomPreference_pkey" PRIMARY KEY ("id"));
+CREATE UNIQUE INDEX "RoomPreference_userId_roomId_key" ON "RoomPreference"("userId", "roomId");
+CREATE INDEX "RoomPreference_userId_groupName_position_idx" ON "RoomPreference"("userId", "groupName", "position");
+ALTER TABLE "RoomPreference" ADD CONSTRAINT "RoomPreference_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "RoomPreference" ADD CONSTRAINT "RoomPreference_roomId_fkey" FOREIGN KEY ("roomId") REFERENCES "Room"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+CREATE TABLE "RoomPermission" ("id" TEXT NOT NULL, "roomId" TEXT NOT NULL, "userId" TEXT NOT NULL, "canView" BOOLEAN NOT NULL DEFAULT true, "canPost" BOOLEAN NOT NULL DEFAULT true, "canAddAgent" BOOLEAN NOT NULL DEFAULT false, "canApprove" BOOLEAN NOT NULL DEFAULT false, "canArtifacts" BOOLEAN NOT NULL DEFAULT true, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP(3) NOT NULL, CONSTRAINT "RoomPermission_pkey" PRIMARY KEY ("id"));
+CREATE UNIQUE INDEX "RoomPermission_roomId_userId_key" ON "RoomPermission"("roomId", "userId");
+CREATE INDEX "RoomPermission_userId_roomId_idx" ON "RoomPermission"("userId", "roomId");
+ALTER TABLE "RoomPermission" ADD CONSTRAINT "RoomPermission_roomId_fkey" FOREIGN KEY ("roomId") REFERENCES "Room"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "RoomPermission" ADD CONSTRAINT "RoomPermission_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;

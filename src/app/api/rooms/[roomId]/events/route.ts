@@ -4,6 +4,7 @@ import { roomSignals, subscribeRoom } from "@/lib/chat/events";
 import { db } from "@/lib/db";
 import { errorResponse } from "@/lib/http";
 import { ensureAiWorker } from "@/lib/chat/ai-trigger";
+import { roomPermission } from "@/lib/chat/rooms";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,6 +22,7 @@ export async function GET(request: Request, context: { params: Promise<{ roomId:
   const roomId = (await context.params).roomId;
   const result = await auth(roomId);
   if (result.error) return result.error;
+  if (!(await roomPermission(result.user.id, roomId, "canView"))) return errorResponse("无权查看该房间", 403, "FORBIDDEN");
 
   const url = new URL(request.url);
   const after = Number(url.searchParams.get("after") || 0);

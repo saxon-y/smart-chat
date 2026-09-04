@@ -14,6 +14,10 @@ export type Room = {
   slug?: string;
   memberCount?: number;
   lastSequence?: number;
+  groupName?: string;
+  position?: number;
+  favorite?: boolean;
+  collapsed?: boolean;
 };
 export type Member = {
   id: string;

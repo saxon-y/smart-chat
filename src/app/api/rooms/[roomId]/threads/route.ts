@@ -1,12 +1,14 @@
 import { getCurrentUser } from "@/lib/auth/session";
 import { activeMembership } from "@/lib/chat";
+import { roomPermission } from "@/lib/chat/rooms";
 import { createThread } from "@/lib/chat/thread";
 import { errorResponse, json } from "@/lib/http";
 export const runtime = "nodejs";
 export async function POST(request: Request, context: { params: Promise<{ roomId: string }> }) {
   const roomId = (await context.params).roomId; const user = await getCurrentUser();
   if (!user) return errorResponse("需要先登录", 401, "UNAUTHENTICATED");
-  const member = await activeMembership(roomId, user.id); if (!member) return errorResponse("需要先加入该房间", 403, "FORBIDDEN");
+  const member = await activeMembership(roomId, user.id);
+  if (!member || !await roomPermission(user.id, roomId, "canPost")) return errorResponse("无权在该房间创建 Thread", 403, "FORBIDDEN");
   const body = await request.json().catch(() => ({}));
   if (typeof body.rootMessageId !== "string") return errorResponse("rootMessageId 必填", 400, "VALIDATION_ERROR");
   try { return json({ thread: await createThread(roomId, member.id, body.rootMessageId) }, { status: 201 }); }

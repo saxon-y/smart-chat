@@ -5,6 +5,7 @@ import { getCurrentUser } from "@/lib/auth/session";
 import { isUserAdmin } from "@/lib/auth/permissions";
 import { activeMembership, loadAgentNames, loadAgentStyles, publicMember } from "@/lib/chat";
 import { errorResponse, json } from "@/lib/http";
+import { roomPermission } from "@/lib/chat/rooms";
 
 export const runtime = "nodejs";
 
@@ -22,6 +23,7 @@ export async function GET(_request: Request, context: { params: Promise<{ roomId
   const roomId = (await context.params).roomId;
   const result = await roomAndUser(roomId);
   if ("error" in result) return result.error;
+  if (!(await roomPermission(result.user.id, roomId, "canAddAgent"))) return errorResponse("无权添加 Agent", 403, "FORBIDDEN");
   const [agents, members, agentNames] = await Promise.all([
     db.agent.findMany({ where: { enabled: true, kind: { not: "SUPERVISOR" } }, orderBy: { name: "asc" }, select: { key: true, name: true, description: true, kind: true, capabilities: true } }),
     db.roomMember.findMany({ where: { roomId, principalType: PrincipalType.ASSISTANT, leftAt: null }, select: { id: true, assistantKey: true, joinedAt: true } }),
