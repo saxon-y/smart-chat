@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createOAuthRequest, OAUTH_COOKIE, OAUTH_COOKIE_MAX_AGE, OAuthError, parseOAuthProvider } from "@/lib/auth/oauth";
+import { createOAuthRequest, OAUTH_COOKIE, OAUTH_COOKIE_MAX_AGE, OAuthError, oauthLoginErrorUrl, parseOAuthProvider } from "@/lib/auth/oauth";
 
 export const runtime = "nodejs";
 
@@ -20,6 +20,6 @@ export async function GET(request: Request, context: { params: Promise<{ provide
   } catch (error) {
     console.error(`[oauth] failed to start ${provider} login`, error);
     const code = error instanceof OAuthError ? error.code : "oauth_start_failed";
-    return NextResponse.redirect(new URL(`/login?error=${encodeURIComponent(code)}`, request.url));
+    return NextResponse.redirect(oauthLoginErrorUrl(request, code));
   }
 }
