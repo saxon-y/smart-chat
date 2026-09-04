@@ -36,8 +36,8 @@ if [[ -z "$TARGET_TAG" ]]; then
   fail "usage: $0 <image-tag>   example: $0 sha-a1b2c3d4e5f6"
 fi
 
-if [[ ! "$TARGET_TAG" =~ ^sha-[0-9a-f]{7,40}$ ]] && [[ ! "$TARGET_TAG" =~ ^v[0-9][A-Za-z0-9._-]*$ ]]; then
-  fail "refusing tag '$TARGET_TAG'; production must use sha-<git-sha> or a version tag like v1.2.0"
+if [[ ! "$TARGET_TAG" =~ ^sha-[0-9a-f]{7,40}$ ]] && [[ ! "$TARGET_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  fail "refusing tag '$TARGET_TAG'; production must use sha-<git-sha> or vMAJOR.MINOR.PATCH like v1.2.3"
 fi
 
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then

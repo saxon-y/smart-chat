@@ -2,11 +2,16 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches: [main]
+  workflow_call:
+    inputs:
+      git_ref:
+        description: Git SHA, branch, or tag to check out
+        required: false
+        type: string
+        default: ""
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ inputs.git_ref || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -40,6 +45,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_call' && inputs.git_ref || github.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
