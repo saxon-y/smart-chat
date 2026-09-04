@@ -133,6 +133,10 @@ export function oauthRedirectUri(request: Request, provider: OAuthProviderKey) {
   return `${oauthOrigin(request)}/api/auth/oauth/${provider}/callback`;
 }
 
+export function oauthLoginErrorUrl(request: Request, code: string) {
+  return new URL(`/login?error=${encodeURIComponent(code)}`, `${oauthOrigin(request)}/`);
+}
+
 export function safeReturnTo(value: string | null) {
   return value && value.startsWith("/") && !value.startsWith("//") ? value : "/chat";
 }

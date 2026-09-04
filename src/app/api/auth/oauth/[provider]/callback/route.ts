@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import * as oidc from "openid-client";
 import { createSession } from "@/lib/auth/session";
-import { authenticateOAuthProfile, OAUTH_COOKIE, OAuthError, oauthConfiguration, oauthOrigin, oauthProfile, oauthRedirectUri, parseOAuthProvider, readOAuthState } from "@/lib/auth/oauth";
+import { authenticateOAuthProfile, OAUTH_COOKIE, OAuthError, oauthConfiguration, oauthLoginErrorUrl, oauthOrigin, oauthProfile, oauthRedirectUri, parseOAuthProvider, readOAuthState } from "@/lib/auth/oauth";
 
 export const runtime = "nodejs";
 
@@ -18,7 +18,7 @@ function clearOAuthCookie(response: NextResponse) {
 }
 
 function loginRedirect(request: Request, code: string) {
-  const response = NextResponse.redirect(new URL(`/login?error=${encodeURIComponent(code)}`, request.url));
+  const response = NextResponse.redirect(oauthLoginErrorUrl(request, code));
   return clearOAuthCookie(response);
 }
 
